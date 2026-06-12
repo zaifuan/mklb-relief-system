@@ -1,18 +1,27 @@
 // ════════════════════════════════════════════════════════════
 //  sync.service — orchestrator penyegerakan Google Sheet → PostgreSQL
-//  Aliran: kunci → baca semua tab → validasi → tulis (1 transaction)
+//  Aliran: kunci → baca 3 tab MASTER → validasi → tulis (1 transaction)
 //          → kemaskini sync_logs + audit_logs → pulang statistik.
+//
+//  SKOP (keputusan): server mini PC hanya import DATA MASTER JADUAL:
+//    • KATEGORI GURU  → teachers / teacher_categories
+//    • JADUAL GURU    → teacher_schedule
+//    • JADUAL KELAS   → class_schedule
+//
+//  Tab OPERASI GAS TIDAK disync (diurus dalam PostgreSQL):
+//    pengecualian_relief, ketidakhadiran, penggantian, log, dsb.
+//  → 'pengecualian_relief' SENGAJA tidak dibaca; relief_exclusions
+//    TIDAK disentuh semasa sync (data PostgreSQL kekal).
 // ════════════════════════════════════════════════════════════
 
 import prisma from '../lib/prisma.js';
 import { startSync, finishSyncOk, finishSyncFail, findRunningSync } from '../lib/syncAudit.js';
 import { writeAudit } from '../lib/audit.js';
-import { TABS, SYNC_PENGECUALIAN } from './sheetConfig.js';
+import { TABS } from './sheetConfig.js';
 import { fetchTab } from './googleSheet.service.js';
 import { prepareGuru, writeGuru } from './syncGuru.service.js';
 import { prepareJadual, writeJadual } from './syncJadual.service.js';
 import { prepareJadualKelas, writeJadualKelas } from './syncJadualKelas.service.js';
-import { preparePengecualian, writePengecualian } from './syncPengecualian.service.js';
 
 const STALE_RUNNING_MS = 15 * 60 * 1000; // anggap RUNNING > 15 minit sebagai tersekat
 
@@ -29,30 +38,26 @@ export async function runSync({ userId = null, ip = null } = {}) {
   const log = await startSync();
 
   try {
-    // 2) Baca semua tab (panggilan luaran, belum sentuh DB)
-    const fetches = [
+    // 2) Baca HANYA 3 tab master (tab operasi GAS tidak dibaca langsung)
+    const [rawGuru, rawJadual, rawKelas] = await Promise.all([
       fetchTab(TABS.guru),
       fetchTab(TABS.jadual),
       fetchTab(TABS.jadualKelas),
-    ];
-    if (SYNC_PENGECUALIAN) fetches.push(fetchTab(TABS.pengecualian));
-
-    const [rawGuru, rawJadual, rawKelas, rawPeng] = await Promise.all(fetches);
+    ]);
 
     // 3) Validasi + sediakan (baling jika ralat struktur — sebelum sebarang tulisan)
     const pGuru = prepareGuru(rawGuru);
     const pJadual = prepareJadual(rawJadual);
     const pKelas = prepareJadualKelas(rawKelas);
-    const pPeng = SYNC_PENGECUALIAN ? preparePengecualian(rawPeng) : null;
 
-    // 4) Tulis dalam SATU transaction (all-or-nothing)
+    // 4) Tulis dalam SATU transaction (all-or-nothing) — master sahaja.
+    //    Tiada sentuhan ke relief_exclusions / absence_records / relief_*.
     const result = await prisma.$transaction(
       async (tx) => {
         const guru = await writeGuru(tx, pGuru);
         const jadual = await writeJadual(tx, pJadual);
         const jadualKelas = await writeJadualKelas(tx, pKelas);
-        const pengecualian = pPeng ? await writePengecualian(tx, pPeng) : 0;
-        return { guru, jadual, jadualKelas, pengecualian };
+        return { guru, jadual, jadualKelas };
       },
       { timeout: 120000, maxWait: 20000 }
     );
@@ -64,15 +69,15 @@ export async function runSync({ userId = null, ip = null } = {}) {
       guruDinyahaktif: result.guru.deactivated,
       jadual: result.jadual,
       jadualKelas: result.jadualKelas,
-      pengecualian: result.pengecualian,
+      pengecualian: 0, // tidak disync
       durationMs,
       dilangkau: {
         guru: pGuru.skipped,
         jadual: pJadual.skipped,
         jadualKelas: pKelas.skipped,
-        pengecualian: pPeng ? pPeng.skipped : 0,
+        pengecualian: true, // tab pengecualian_relief sengaja dilangkau (diurus dalam PostgreSQL)
       },
-      isu: pPeng ? pPeng.issues : [],
+      isu: [],
     };
 
     await finishSyncOk(log.id, stats);
