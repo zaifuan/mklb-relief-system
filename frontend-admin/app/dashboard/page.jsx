@@ -17,6 +17,11 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
 
+  // Sync Google Sheet (Super Admin)
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncResult, setSyncResult] = useState(null);
+  const [syncError, setSyncError] = useState('');
+
   useEffect(() => {
     let alive = true;
     api
@@ -46,6 +51,22 @@ export default function DashboardPage() {
     }
     clearToken();
     router.replace('/login');
+  }
+
+  async function handleSync() {
+    if (syncBusy) return;
+    setSyncBusy(true);
+    setSyncError('');
+    setSyncResult(null);
+    try {
+      const r = await api.sync.run();
+      setSyncResult(r);
+    } catch (e) {
+      if (e.status === 409) setSyncError(e.message || 'Sync sedang berjalan. Cuba lagi sebentar.');
+      else setSyncError(e.message || 'Sync gagal. Sila cuba lagi.');
+    } finally {
+      setSyncBusy(false);
+    }
   }
 
   if (loading) {
@@ -140,6 +161,31 @@ export default function DashboardPage() {
             </div>
             <span className="modulArrow" aria-hidden="true">→</span>
           </Link>
+
+          {roleKey === 'SUPER_ADMIN' && (
+            <section className="sync">
+              <div className="syncTitle">Sync Google Sheet</div>
+              <div className="syncSub">
+                Kemas kini data guru, jadual guru dan jadual kelas daripada Google Sheet.
+              </div>
+              <button className="syncBtn" onClick={handleSync} disabled={syncBusy}>
+                {syncBusy ? 'Menyegerak…' : 'Sync Sekarang'}
+              </button>
+
+              {syncError && <div className="syncMsg err" role="alert">{syncError}</div>}
+              {syncResult && (
+                <div className="syncMsg ok" role="status">
+                  <b>Sync berjaya.</b>
+                  <div className="syncStats">
+                    <span>Guru: <b>{syncResult.guru ?? '-'}</b></span>
+                    <span>Jadual Guru: <b>{syncResult.jadual ?? '-'}</b></span>
+                    <span>Jadual Kelas: <b>{syncResult.jadualKelas ?? '-'}</b></span>
+                    <span>Masa: <b>{syncResult.durationMs != null ? `${(syncResult.durationMs / 1000).toFixed(1)}s` : '-'}</b></span>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
 
           <p className="note">Modul Telegram &amp; PDF akan tersedia pada fasa seterusnya.</p>
         </div>
@@ -333,6 +379,69 @@ export default function DashboardPage() {
         .modulArrow {
           font-size: 18px;
           color: #0f766e;
+        }
+        .sync {
+          margin-top: 22px;
+          padding: 16px;
+          background: #f1f5f4;
+          border: 1px solid #d8e2de;
+          border-radius: 12px;
+        }
+        .syncTitle {
+          font-size: 15px;
+          font-weight: 700;
+          color: #0f2a23;
+        }
+        .syncSub {
+          font-size: 12.5px;
+          color: #5b716a;
+          margin-top: 2px;
+        }
+        .syncBtn {
+          margin-top: 12px;
+          padding: 9px 16px;
+          font-size: 14px;
+          font-weight: 600;
+          color: #ffffff;
+          background: #0f766e;
+          border: none;
+          border-radius: 9px;
+          cursor: pointer;
+        }
+        .syncBtn:hover:not(:disabled) {
+          background: #0b5e57;
+        }
+        .syncBtn:focus-visible {
+          outline: 2px solid #0f766e;
+          outline-offset: 1px;
+        }
+        .syncBtn:disabled {
+          opacity: 0.6;
+          cursor: progress;
+        }
+        .syncMsg {
+          margin-top: 12px;
+          padding: 10px 12px;
+          font-size: 13px;
+          border-radius: 9px;
+        }
+        .syncMsg.ok {
+          color: #0b5e57;
+          background: #e6f4f0;
+          border: 1px solid #c2e3da;
+        }
+        .syncMsg.err {
+          color: #b42318;
+          background: #fef3f2;
+          border: 1px solid #fcd2cd;
+        }
+        .syncStats {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 12px;
+          margin-top: 6px;
+          font-size: 12.5px;
+          color: #2b3f39;
         }
       `}</style>
     </div>

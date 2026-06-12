@@ -76,4 +76,10 @@ export const api = {
     preview: (tarikh) => request(`/api/telegram/snapshot/preview${qs({ tarikh })}`),
     send: (tarikh) => request('/api/telegram/snapshot/send', { method: 'POST', body: { tarikh } }),
   },
+
+  // Sync Google Sheet (master data) — run hanya SUPER_ADMIN
+  sync: {
+    run: () => request('/api/sync/run', { method: 'POST' }),
+    status: () => request('/api/sync/status'),
+  },
 };
