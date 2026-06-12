@@ -1,0 +1,102 @@
+name: relief-system
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: relief-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      TZ: ${TZ:-Asia/Kuala_Lumpur}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [relief-net]
+
+  backend:
+    build: ./backend
+    container_name: relief-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      DATABASE_URL: ${DATABASE_URL}
+      BACKEND_PORT: ${BACKEND_PORT:-4000}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
+      SEED_DEFAULT_PASSWORD: ${SEED_DEFAULT_PASSWORD:-ubah1234}
+      SEED_ON_START: ${SEED_ON_START:-true}
+      FRONTEND_BORANG_ORIGIN: ${FRONTEND_BORANG_ORIGIN}
+      FRONTEND_ADMIN_ORIGIN: ${FRONTEND_ADMIN_ORIGIN}
+      GOOGLE_SHEET_ID: ${GOOGLE_SHEET_ID}
+      GOOGLE_SERVICE_ACCOUNT_EMAIL: ${GOOGLE_SERVICE_ACCOUNT_EMAIL}
+      GOOGLE_PRIVATE_KEY: ${GOOGLE_PRIVATE_KEY}
+      TZ: ${TZ:-Asia/Kuala_Lumpur}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      ENABLE_SCHEDULER: ${ENABLE_SCHEDULER:-true}
+      CRON_SECRET: ${CRON_SECRET}
+    # Bind-mount kod supaya boleh edit terus (WinSCP) — restart backend selepas edit.
+    # node_modules kekal dalam named volume (diisi dari imej semasa first run).
+    volumes:
+      - ./backend:/app
+      - backend_node_modules:/app/node_modules
+    ports:
+      - "${BACKEND_PORT:-4000}:4000"
+    networks: [relief-net]
+
+  frontend-borang:
+    build:
+      context: ./frontend-borang
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    container_name: relief-frontend-borang
+    restart: unless-stopped
+    depends_on: [backend]
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      TZ: ${TZ:-Asia/Kuala_Lumpur}
+    ports:
+      - "${FRONTEND_BORANG_PORT:-3001}:3000"
+    networks: [relief-net]
+
+  frontend-admin:
+    build:
+      context: ./frontend-admin
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    container_name: relief-frontend-admin
+    restart: unless-stopped
+    depends_on: [backend]
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      TZ: ${TZ:-Asia/Kuala_Lumpur}
+    ports:
+      - "${FRONTEND_ADMIN_PORT:-3002}:3000"
+    networks: [relief-net]
+
+  # ── Cloudflare Tunnel — aktifkan pada Fasa 9 ──
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   container_name: relief-cloudflared
+  #   restart: unless-stopped
+  #   command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+  #   depends_on: [frontend-borang, frontend-admin, backend]
+  #   networks: [relief-net]
+
+volumes:
+  pgdata:
+  backend_node_modules:
+
+networks:
+  relief-net:
+    driver: bridge

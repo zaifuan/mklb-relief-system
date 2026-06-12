@@ -1,0 +1,340 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { api } from '../../lib/api.js';
+import { clearToken } from '../../lib/auth.js';
+
+const ROLE_LABEL = {
+  SUPER_ADMIN: 'Super Admin',
+  ADMIN_RELIEF: 'Admin Relief',
+};
+
+export default function DashboardPage() {
+  const router = useRouter();
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .me()
+      .then((u) => {
+        if (alive) setUser(u);
+      })
+      .catch(() => {
+        clearToken();
+        router.replace('/login');
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [router]);
+
+  async function handleLogout() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.logout();
+    } catch {
+      /* abaikan — tetap log keluar di klien */
+    }
+    clearToken();
+    router.replace('/login');
+  }
+
+  if (loading) {
+    return (
+      <main className="state">
+        <p>Memuatkan…</p>
+        <style jsx>{`
+          .state {
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            background: #eef3f1;
+            color: #5b716a;
+            font-size: 15px;
+          }
+        `}</style>
+      </main>
+    );
+  }
+
+  if (!user) return null;
+
+  const roleKey = user.role;
+  const roleLabel = ROLE_LABEL[roleKey] || roleKey;
+
+  return (
+    <div className="wrap">
+      <header className="bar">
+        <div className="brand">
+          <span className="mark" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+              <rect x="3" y="3" width="18" height="18" rx="3" stroke="white" strokeWidth="1.6" />
+              <path d="M3 9h18M3 15h18M9 3v18M15 3v18" stroke="white" strokeWidth="1.1" opacity="0.85" />
+              <rect x="9" y="9" width="6" height="6" fill="#C9A227" />
+            </svg>
+          </span>
+          <div className="bname">Jadual Guru Ganti</div>
+        </div>
+        <div className="right">
+          <span className="who">{user.nama}</span>
+          <button className="logout" onClick={handleLogout} disabled={busy}>
+            {busy ? 'Keluar…' : 'Log Keluar'}
+          </button>
+        </div>
+      </header>
+
+      <main className="main">
+        <div className="card">
+          <div className="status">
+            <span className="dot" aria-hidden="true">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+                <path d="M5 12.5l4.2 4.2L19 7" stroke="white" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+            Fasa 2 Authentication Berjaya
+          </div>
+
+          <h1 className="hello">Selamat datang, {user.nama.split(' ')[0]}.</h1>
+          <p className="lede">Anda telah log masuk ke panel pentadbir.</p>
+
+          <dl className="facts">
+            <div className="row">
+              <dt>Nama pengguna</dt>
+              <dd>{user.nama}</dd>
+            </div>
+            <div className="row">
+              <dt>Peranan</dt>
+              <dd>
+                <span className={`badge ${roleKey === 'SUPER_ADMIN' ? 'gold' : 'green'}`}>{roleLabel}</span>
+              </dd>
+            </div>
+            {user.hariBertugas && (
+              <div className="row">
+                <dt>Hari bertugas</dt>
+                <dd className="cap">{user.hariBertugas.toLowerCase()}</dd>
+              </div>
+            )}
+          </dl>
+
+          <Link href="/dashboard/absence" className="modul">
+            <div>
+              <div className="modulTitle">Ketidakhadiran Guru</div>
+              <div className="modulSub">Lihat, semak &amp; urus rekod ketidakhadiran</div>
+            </div>
+            <span className="modulArrow" aria-hidden="true">→</span>
+          </Link>
+
+          <Link href="/dashboard/relief" className="modul">
+            <div>
+              <div className="modulTitle">Jadual Relief</div>
+              <div className="modulSub">Jana, semak &amp; sahkan cadangan guru ganti</div>
+            </div>
+            <span className="modulArrow" aria-hidden="true">→</span>
+          </Link>
+
+          <p className="note">Modul Telegram &amp; PDF akan tersedia pada fasa seterusnya.</p>
+        </div>
+      </main>
+
+      <style jsx>{`
+        .wrap {
+          min-height: 100vh;
+          background: #eef3f1;
+        }
+        .bar {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 16px;
+          padding: 14px 20px;
+          background: #ffffff;
+          border-bottom: 1px solid #dce5e2;
+        }
+        .brand {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+        .mark {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 32px;
+          height: 32px;
+          border-radius: 9px;
+          background: linear-gradient(160deg, #0f766e, #0b5e57);
+        }
+        .bname {
+          font-size: 15px;
+          font-weight: 700;
+          color: #0f2a23;
+          letter-spacing: -0.01em;
+        }
+        .right {
+          display: flex;
+          align-items: center;
+          gap: 14px;
+        }
+        .who {
+          font-size: 13.5px;
+          color: #2b3f39;
+        }
+        .logout {
+          padding: 8px 14px;
+          font-size: 13px;
+          font-weight: 600;
+          color: #0f766e;
+          background: #f1f5f4;
+          border: 1px solid #d3ded9;
+          border-radius: 9px;
+          cursor: pointer;
+        }
+        .logout:hover:not(:disabled) {
+          background: #e7eeec;
+        }
+        .logout:focus-visible {
+          outline: 2px solid #0f766e;
+          outline-offset: 1px;
+        }
+        .logout:disabled {
+          opacity: 0.6;
+          cursor: progress;
+        }
+        .main {
+          display: grid;
+          place-items: center;
+          padding: 40px 20px;
+        }
+        .card {
+          width: 100%;
+          max-width: 520px;
+          background: #ffffff;
+          border: 1px solid #dce5e2;
+          border-radius: 16px;
+          padding: 30px 28px;
+          box-shadow: 0 1px 2px rgba(15, 42, 35, 0.04), 0 18px 40px -26px rgba(15, 42, 35, 0.24);
+        }
+        .status {
+          display: inline-flex;
+          align-items: center;
+          gap: 9px;
+          padding: 7px 13px 7px 9px;
+          font-size: 13px;
+          font-weight: 600;
+          color: #0b5e57;
+          background: #e6f4f0;
+          border: 1px solid #c2e3da;
+          border-radius: 999px;
+        }
+        .dot {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 20px;
+          height: 20px;
+          border-radius: 50%;
+          background: #0f766e;
+        }
+        .hello {
+          margin: 20px 0 4px;
+          font-size: 22px;
+          letter-spacing: -0.01em;
+          color: #0f2a23;
+          font-weight: 700;
+        }
+        .lede {
+          margin: 0 0 22px;
+          font-size: 14.5px;
+          color: #5b716a;
+        }
+        .facts {
+          margin: 0;
+          border-top: 1px solid #eef2f0;
+        }
+        .row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 16px;
+          padding: 13px 0;
+          border-bottom: 1px solid #eef2f0;
+        }
+        .row dt {
+          font-size: 13.5px;
+          color: #6b8079;
+        }
+        .row dd {
+          margin: 0;
+          font-size: 14.5px;
+          font-weight: 600;
+          color: #0f2a23;
+          text-align: right;
+        }
+        .cap {
+          text-transform: capitalize;
+        }
+        .badge {
+          display: inline-block;
+          padding: 4px 11px;
+          font-size: 12.5px;
+          font-weight: 600;
+          border-radius: 999px;
+        }
+        .badge.green {
+          color: #0b5e57;
+          background: #e6f4f0;
+          border: 1px solid #c2e3da;
+        }
+        .badge.gold {
+          color: #8a6d12;
+          background: #faf3df;
+          border: 1px solid #ecdcae;
+        }
+        .note {
+          margin: 22px 0 0;
+          font-size: 13px;
+          color: #80958e;
+        }
+        .modul {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin-top: 22px;
+          padding: 15px 16px;
+          text-decoration: none;
+          background: #f1f5f4;
+          border: 1px solid #d8e2de;
+          border-radius: 12px;
+        }
+        .modul:hover {
+          background: #e9f1ee;
+          border-color: #bcd5cd;
+        }
+        .modulTitle {
+          font-size: 15px;
+          font-weight: 700;
+          color: #0f2a23;
+        }
+        .modulSub {
+          font-size: 12.5px;
+          color: #5b716a;
+          margin-top: 2px;
+        }
+        .modulArrow {
+          font-size: 18px;
+          color: #0f766e;
+        }
+      `}</style>
+    </div>
+  );
+}

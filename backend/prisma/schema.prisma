@@ -1,0 +1,326 @@
+// ════════════════════════════════════════════════════════════
+//  Prisma Schema — Sistem Auto Jana Jadual Guru Ganti
+//  Fasa 1: skema penuh (18 jadual) + migrasi pertama
+//  Datasource: PostgreSQL
+// ════════════════════════════════════════════════════════════
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")	
+}
+
+// ──────────────────────────────────────────────
+// ENUMS
+// ──────────────────────────────────────────────
+
+enum StatusBorang {
+  AKTIF
+  DIBATALKAN
+  SELESAI
+}
+
+enum ReliefBatchStatus {
+  DRAF
+  DIJANA
+  DIHANTAR
+  SELESAI
+}
+
+enum ReliefRowStatus {
+  CADANGAN
+  DISAHKAN
+  BATAL
+}
+
+enum ExclusionMod {
+  SEPANJANG_HARI
+  SLOT
+}
+
+enum RoleName {
+  SUPER_ADMIN
+  ADMIN_RELIEF
+}
+
+enum TelegramJenis {
+  SNAPSHOT
+  REALTIME
+  MANUAL
+  RELIEF_PDF
+  PEMBATALAN
+}
+
+enum SyncStatus {
+  RUNNING
+  OK
+  FAIL
+}
+
+// ──────────────────────────────────────────────
+// MASTER DATA  (di-sync dari Google Sheet — Fasa 2)
+// ──────────────────────────────────────────────
+
+model TeacherCategory {
+  id             Int      @id @default(autoincrement())
+  nama           String   @unique // PENTADBIR, BIASA, PSS, KAUNSELOR, PRAKTIKAL
+  isReliefExempt Boolean  @default(false) // KATEGORI_EXEMPT (PENTADBIR = true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("teacher_categories")
+}
+
+model Teacher {
+  id        Int      @id @default(autoincrement())
+  nama      String   @unique
+  kategori  String // padanan lajur KATEGORI pada sheet KATEGORI GURU
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("teachers")
+}
+
+model Kelas {
+  id        Int      @id @default(autoincrement())
+  nama      String   @unique // 1A..5M, STAMLULU, STAMMARJAN
+  createdAt DateTime @default(now())
+
+  @@map("classes")
+}
+
+model TeacherSchedule {
+  id        Int      @id @default(autoincrement())
+  hari      String // ISNIN..JUMAAT (uppercase)
+  slot      String? // nombor slot/waktu
+  masa      String // "7.40-8.10"
+  guru      String
+  kelas     String // "FREE" = waktu lapang
+  subjek    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([hari, guru])
+  @@index([hari, kelas])
+  @@map("teacher_schedule")
+}
+
+model ClassSchedule {
+  id        Int      @id @default(autoincrement())
+  hari      String
+  kelas     String
+  masa      String
+  namaGuru  String?
+  subjek    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([hari, kelas])
+  @@map("class_schedule")
+}
+
+// ──────────────────────────────────────────────
+// DATA OPERASI  (PostgreSQL sahaja)
+// ──────────────────────────────────────────────
+
+model AbsenceRecord {
+  id            Int          @id @default(autoincrement())
+  guruNama      String
+  hari          String
+  tarikh        DateTime     @db.Date
+  sebabKategori String // MC, CRK, CTR, Program Sekolah, Program Luar, Lain-lain
+  sebabDetail   String?
+  kelas         String       @default("-") // "SEMUA" / senarai kelas / "-"
+  perluGanti    Boolean      @default(true) // lajur STATUS (YA/TIDAK)
+  statusBorang  StatusBorang @default(AKTIF)
+  subjek        String?
+  submittedBy   String?
+  jenis         String       @default("SEPANJANG_HARI") // SEPANJANG_HARI / SEPARUH_HARI
+  masaMula      String? // slot/jam mula bila SEPARUH_HARI (teks bebas)
+  reference     String?      @unique // ABS-YYYYMMDD-NNN
+  deletedAt     DateTime? // soft delete (Padam oleh Super Admin)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([tarikh, statusBorang])
+  @@index([guruNama, tarikh])
+  @@map("absence_records")
+}
+
+model DailySnapshot {
+  id        Int           @id @default(autoincrement())
+  tarikh    DateTime      @unique @db.Date
+  data      Json // salinan beku teacher_schedule untuk hari itu
+  createdAt DateTime      @default(now())
+  batches   ReliefBatch[]
+
+  @@map("daily_snapshots")
+}
+
+model ReliefBatch {
+  id          Int                @id @default(autoincrement())
+  tarikh      DateTime           @unique @db.Date
+  status      ReliefBatchStatus  @default(DRAF)
+  snapshotId  Int?
+  snapshot    DailySnapshot?     @relation(fields: [snapshotId], references: [id])
+  generatedBy String?
+  generatedAt DateTime?
+  confirmedBy String?
+  confirmedAt DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  assignments ReliefAssignment[]
+
+  @@map("relief_batches")
+}
+
+model ReliefAssignment {
+  id           Int             @id @default(autoincrement())
+  batchId      Int
+  batch        ReliefBatch     @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  guruTakHadir String
+  tarikh       DateTime        @db.Date
+  kelas        String
+  masa         String
+  hari         String
+  guruGanti    String?
+  kategori     String?
+  status       ReliefRowStatus @default(CADANGAN)
+  isTier2      Boolean         @default(false) // penanda (2x) — relief kedua
+  auditNote    String?
+  subjek       String?
+  updatedBy    String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@index([tarikh])
+  @@index([batchId])
+  @@index([guruGanti, tarikh])
+  @@map("relief_assignments")
+}
+
+model ReliefExclusion {
+  id         Int          @id @default(autoincrement())
+  guruNama   String
+  tarikh     DateTime     @db.Date
+  mod        ExclusionMod @default(SEPANJANG_HARI)
+  masaDari   String?
+  masaHingga String?
+  createdBy  String?
+  createdAt  DateTime     @default(now())
+
+  @@index([tarikh])
+  @@map("relief_exclusions")
+}
+
+model SpecialRestriction {
+  id         Int      @id @default(autoincrement())
+  target     String // nama guru penuh atau "LELAKI"
+  hariList   String[] // cth: ["ISNIN","SELASA"]
+  masaDari   String // "13.00"
+  masaHingga String // "13.30"
+  isActive   Boolean  @default(true)
+  catatan    String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("special_restrictions")
+}
+
+// ──────────────────────────────────────────────
+// AUTH & PENTADBIRAN
+// ──────────────────────────────────────────────
+
+model Role {
+  id          Int      @id @default(autoincrement())
+  nama        RoleName @unique
+  permissions Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  users       User[]
+
+  @@map("roles")
+}
+
+model User {
+  id              Int              @id @default(autoincrement())
+  nama            String
+  username        String           @unique
+  passwordHash    String
+  roleId          Int
+  role            Role             @relation(fields: [roleId], references: [id])
+  isActive        Boolean          @default(true)
+  lastLogin       DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  adminAssignment AdminAssignment?
+
+  @@map("users")
+}
+
+model AdminAssignment {
+  id           Int      @id @default(autoincrement())
+  userId       Int      @unique
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  hariBertugas String // ISNIN..JUMAAT — boleh diubah oleh Super Admin
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("admin_assignments")
+}
+
+// ──────────────────────────────────────────────
+// LOG & SISTEM
+// ──────────────────────────────────────────────
+
+model TelegramLog {
+  id                Int           @id @default(autoincrement())
+  tarikh            DateTime?     @db.Date
+  jenis             TelegramJenis
+  messageText       String?
+  telegramMessageId String?
+  status            String?
+  sentAt            DateTime      @default(now())
+
+  @@index([tarikh])
+  @@map("telegram_logs")
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int?
+  action    String
+  entity    String?
+  detail    Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model SyncLog {
+  id            Int        @id @default(autoincrement())
+  startedAt     DateTime   @default(now())
+  finishedAt    DateTime?
+  status        SyncStatus @default(RUNNING)
+  recordsSynced Json?
+  error         String?
+
+  @@map("sync_logs")
+}
+
+model SystemSetting {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@map("system_settings")
+}
