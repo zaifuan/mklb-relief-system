@@ -3,6 +3,25 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 
+const BULAN = ['Jan', 'Feb', 'Mac', 'Apr', 'Mei', 'Jun', 'Jul', 'Ogos', 'Sep', 'Okt', 'Nov', 'Dis'];
+function fmtTarikh(iso) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-').map(Number);
+  return `${d} ${BULAN[m - 1]} ${y}`;
+}
+function fmtRange(mula, tamat) {
+  if (!mula) return '';
+  if (!tamat || tamat === mula) return fmtTarikh(mula);
+  return `${fmtTarikh(mula)} – ${fmtTarikh(tamat)}`;
+}
+function todayStr() {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur' }).format(new Date());
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
 export default function Page() {
   const [opts, setOpts] = useState(null);
   const [loadingOpts, setLoadingOpts] = useState(true);
@@ -10,7 +29,8 @@ export default function Page() {
 
   const [form, setForm] = useState({
     guruNama: '',
-    tarikh: '',
+    tarikhMula: '',
+    tarikhTamat: '',
     sebab: '',
     jenis: 'SEPANJANG_HARI',
     masaMula: '',
@@ -18,7 +38,13 @@ export default function Page() {
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
-  const [reference, setReference] = useState('');
+  const [result, setResult] = useState(null);
+
+  // Modal julat tarikh cuti
+  const [dateModal, setDateModal] = useState(false);
+  const [tmpMula, setTmpMula] = useState('');
+  const [tmpTamat, setTmpTamat] = useState('');
+  const [modalErr, setModalErr] = useState('');
 
   useEffect(() => {
     api
@@ -35,9 +61,35 @@ export default function Page() {
     setForm((f) => ({ ...f, [field]: value }));
   }
 
+  function openDateModal() {
+    const m = form.tarikhMula || todayStr();
+    setTmpMula(m);
+    setTmpTamat(form.tarikhTamat || m);
+    setModalErr('');
+    setDateModal(true);
+  }
+  function closeDateModal() {
+    setDateModal(false);
+    setModalErr('');
+  }
+  function confirmDate() {
+    if (!tmpMula) {
+      setModalErr('Sila pilih tarikh mula.');
+      return;
+    }
+    const tamat = tmpTamat || tmpMula;
+    if (tamat < tmpMula) {
+      setModalErr('Tarikh tamat tidak boleh sebelum tarikh mula.');
+      return;
+    }
+    setForm((f) => ({ ...f, tarikhMula: tmpMula, tarikhTamat: tamat }));
+    setDateModal(false);
+    setModalErr('');
+  }
+
   function validate() {
     if (!form.guruNama) return 'Sila pilih nama guru.';
-    if (!form.tarikh) return 'Sila pilih tarikh.';
+    if (!form.tarikhMula) return 'Sila pilih tarikh.';
     if (!form.sebab) return 'Sila pilih sebab ketidakhadiran.';
     if (separuh && !form.masaMula.trim()) return 'Sila isi masa mula untuk separuh hari.';
     if (perluDetail && !form.catatan.trim()) return 'Catatan diperlukan untuk sebab yang dipilih.';
@@ -57,14 +109,15 @@ export default function Page() {
     try {
       const payload = {
         guruNama: form.guruNama,
-        tarikh: form.tarikh,
+        tarikhMula: form.tarikhMula,
+        tarikhTamat: form.tarikhTamat || form.tarikhMula,
         sebab: form.sebab,
         jenis: form.jenis,
         masaMula: separuh ? form.masaMula.trim() : undefined,
         catatan: form.catatan.trim() || undefined,
       };
       const res = await api.submit(payload);
-      setReference(res.reference);
+      setResult(res);
     } catch (err) {
       setError(err.message || 'Penghantaran gagal. Cuba lagi.');
       setSubmitting(false);
@@ -72,8 +125,8 @@ export default function Page() {
   }
 
   function resetForm() {
-    setForm({ guruNama: '', tarikh: '', sebab: '', jenis: 'SEPANJANG_HARI', masaMula: '', catatan: '' });
-    setReference('');
+    setForm({ guruNama: '', tarikhMula: '', tarikhTamat: '', sebab: '', jenis: 'SEPANJANG_HARI', masaMula: '', catatan: '' });
+    setResult(null);
     setError('');
     setSubmitting(false);
   }
@@ -97,7 +150,7 @@ export default function Page() {
           </div>
         </header>
 
-        {reference ? (
+        {result ? (
           <div className="done" role="status" aria-live="polite">
             <span className="check" aria-hidden="true">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
@@ -105,8 +158,24 @@ export default function Page() {
               </svg>
             </span>
             <h1 className="doneTitle">Permohonan diterima</h1>
-            <p className="doneSub">Sila simpan nombor rujukan ini sebagai bukti penghantaran.</p>
-            <div className="ref">{reference}</div>
+            {result.dicipta > 0 ? (
+              <>
+                <p className="doneSub">
+                  {result.mesej || `${result.dicipta} hari berjaya direkod.`} Sila simpan nombor rujukan sebagai bukti.
+                </p>
+                {result.references?.length === 1 ? (
+                  <div className="ref">{result.references[0]}</div>
+                ) : (
+                  <div className="refList">
+                    {result.references?.map((r) => (
+                      <span className="refItem" key={r}>{r}</span>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="doneSub">{result.mesej || 'Semua tarikh dalam julat sudah direkod sebelum ini.'}</p>
+            )}
             <button className="btn ghost" onClick={resetForm}>Hantar borang lain</button>
           </div>
         ) : (
@@ -127,15 +196,20 @@ export default function Page() {
             </select>
             {optsError && <p className="hint err">{optsError}</p>}
 
-            {/* Tarikh */}
-            <label className="lbl" htmlFor="tarikh">Tarikh tidak hadir</label>
-            <input
-              id="tarikh"
-              type="date"
-              className="inp"
-              value={form.tarikh}
-              onChange={(e) => set('tarikh', e.target.value)}
-            />
+            {/* Tarikh — field utama minimal + modal julat */}
+            <label className="lbl" htmlFor="tarikhBtn">Tarikh tidak hadir</label>
+            <button
+              type="button"
+              id="tarikhBtn"
+              className={`inp dateField${form.tarikhMula ? '' : ' ph'}`}
+              onClick={openDateModal}
+            >
+              <span>{form.tarikhMula ? fmtRange(form.tarikhMula, form.tarikhTamat) : 'Pilih tarikh'}</span>
+              <svg className="cal" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <rect x="3" y="4.5" width="18" height="16" rx="2.5" stroke="currentColor" strokeWidth="1.6" />
+                <path d="M3 9h18M8 2.5v4M16 2.5v4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
+            </button>
 
             {/* Sebab */}
             <label className="lbl" htmlFor="sebab">Sebab ketidakhadiran</label>
@@ -211,6 +285,47 @@ export default function Page() {
           </form>
         )}
       </section>
+
+      {dateModal && (
+        <div className="overlay" onClick={closeDateModal}>
+          <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <div className="mHead">
+              <span className="mTitle">Tarikh tidak hadir</span>
+              <button type="button" className="x" onClick={closeDateModal} aria-label="Tutup">×</button>
+            </div>
+
+            <label className="lbl" htmlFor="mMula">Tarikh mula</label>
+            <input
+              id="mMula"
+              type="date"
+              className="inp"
+              value={tmpMula}
+              onChange={(e) => {
+                const v = e.target.value;
+                setTmpMula(v);
+                if (!tmpTamat || tmpTamat < v) setTmpTamat(v);
+              }}
+            />
+
+            <label className="lbl" htmlFor="mTamat">Tarikh tamat cuti</label>
+            <input
+              id="mTamat"
+              type="date"
+              className="inp"
+              value={tmpTamat}
+              min={tmpMula || undefined}
+              onChange={(e) => setTmpTamat(e.target.value)}
+            />
+            <p className="hint">Cuti sehari? Pilih tarikh tamat yang sama dengan tarikh mula.</p>
+            {modalErr && <p className="hint err">{modalErr}</p>}
+
+            <div className="mActions">
+              <button type="button" className="btn ghost mBtn" onClick={closeDateModal}>Batal</button>
+              <button type="button" className="btn mBtn" onClick={confirmDate}>Sahkan</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style jsx>{`
         .screen {
@@ -431,6 +546,88 @@ export default function Page() {
           border-radius: 12px;
           padding: 14px;
           margin-bottom: 20px;
+        }
+        .dateField {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          text-align: left;
+          cursor: pointer;
+        }
+        .dateField.ph {
+          color: #93a39d;
+        }
+        .dateField .cal {
+          flex: none;
+          color: #5b716a;
+        }
+        .refList {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          margin-bottom: 20px;
+        }
+        .refItem {
+          font-size: 15px;
+          font-weight: 700;
+          letter-spacing: 0.02em;
+          color: #0b5e57;
+          background: #e6f4f0;
+          border: 1px solid #c2e3da;
+          border-radius: 10px;
+          padding: 10px 12px;
+        }
+        .overlay {
+          position: fixed;
+          inset: 0;
+          z-index: 50;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 18px;
+          background: rgba(15, 42, 35, 0.42);
+        }
+        .modal {
+          width: 100%;
+          max-width: 380px;
+          background: #fff;
+          border: 1px solid #dce5e2;
+          border-radius: 16px;
+          padding: 18px 18px 20px;
+          box-shadow: 0 20px 50px -20px rgba(15, 42, 35, 0.45);
+        }
+        .mHead {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 2px;
+        }
+        .mTitle {
+          font-size: 15.5px;
+          font-weight: 700;
+          color: #0f2a23;
+        }
+        .x {
+          border: none;
+          background: transparent;
+          font-size: 24px;
+          line-height: 1;
+          color: #80958e;
+          cursor: pointer;
+          padding: 0 4px;
+        }
+        .x:hover {
+          color: #0f2a23;
+        }
+        .mActions {
+          display: flex;
+          gap: 10px;
+          margin-top: 18px;
+        }
+        .mBtn {
+          margin-top: 0;
+          flex: 1;
         }
         @media (prefers-reduced-motion: no-preference) {
           .inp,
