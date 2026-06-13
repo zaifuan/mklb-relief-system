@@ -71,6 +71,16 @@ export default function Page() {
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
 
+  // Tab utama: Hantar Borang / Semak-Batal
+  const [tab, setTab] = useState('hantar'); // 'hantar' | 'semak'
+  const [checkNama, setCheckNama] = useState('');
+  const [checkTarikh, setCheckTarikh] = useState('');
+  const [checkRows, setCheckRows] = useState(null); // null = belum semak, [] = tiada
+  const [checkLoading, setCheckLoading] = useState(false);
+  const [checkError, setCheckError] = useState('');
+  const [checkInfo, setCheckInfo] = useState('');
+  const [checkBusyId, setCheckBusyId] = useState(null); // id rekod sedang dibatalkan
+
   // Modal julat tarikh cuti
   const [dateModal, setDateModal] = useState(false);
   const [tmpMula, setTmpMula] = useState('');
@@ -104,6 +114,47 @@ export default function Page() {
   }
   function buangGuru(nama) {
     setGuruList((list) => list.filter((n) => n !== nama));
+  }
+
+  const labelSebab = (v) => opts?.sebab?.find((s) => s.value === v)?.label || v;
+  const labelJenis = (v) => opts?.jenis?.find((j) => j.value === v)?.label || v;
+  const STATUS_LABEL = { AKTIF: 'Aktif', DIBATALKAN: 'Dibatalkan', SELESAI: 'Selesai' };
+
+  async function semakRekod() {
+    if (!checkNama || !checkTarikh) {
+      setCheckError('Sila pilih nama guru dan tarikh.');
+      return;
+    }
+    setCheckError('');
+    setCheckInfo('');
+    setCheckLoading(true);
+    try {
+      const data = await api.check(checkNama, checkTarikh);
+      setCheckRows(data.records || []);
+    } catch (e) {
+      setCheckError(e.message || 'Gagal menyemak rekod.');
+      setCheckRows(null);
+    } finally {
+      setCheckLoading(false);
+    }
+  }
+
+  async function batalRekod(id) {
+    if (checkBusyId) return;
+    if (!confirm('Adakah anda pasti mahu membatalkan rekod ini?')) return;
+    setCheckError('');
+    setCheckInfo('');
+    setCheckBusyId(id);
+    try {
+      await api.cancel(id, checkNama);
+      setCheckInfo('Rekod telah dibatalkan.');
+      const data = await api.check(checkNama, checkTarikh); // refresh
+      setCheckRows(data.records || []);
+    } catch (e) {
+      setCheckError(e.message || 'Gagal membatalkan rekod.');
+    } finally {
+      setCheckBusyId(null);
+    }
   }
 
   function openDateModal() {
@@ -234,7 +285,103 @@ export default function Page() {
           </div>
         </header>
 
-        {result ? (
+        {/* Tab utama: Hantar Borang / Semak-Batal Rekod */}
+        <div className="seg tabSeg" role="radiogroup" aria-label="Mod borang">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={tab === 'hantar'}
+            className={`segBtn ${tab === 'hantar' ? 'on' : ''}`}
+            onClick={() => setTab('hantar')}
+          >
+            Hantar Borang
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={tab === 'semak'}
+            className={`segBtn ${tab === 'semak' ? 'on' : ''}`}
+            onClick={() => setTab('semak')}
+          >
+            Semak / Batal Rekod
+          </button>
+        </div>
+
+        {tab === 'semak' ? (
+          <div className="checkPanel">
+            <label className="lbl" htmlFor="ckGuru">Nama guru</label>
+            <select
+              id="ckGuru"
+              className="inp"
+              value={checkNama}
+              onChange={(e) => { setCheckNama(e.target.value); setCheckRows(null); setCheckInfo(''); }}
+              disabled={loadingOpts || !!optsError}
+            >
+              <option value="">{loadingOpts ? 'Memuatkan…' : 'Pilih guru'}</option>
+              {opts?.teachers?.map((t) => (
+                <option key={t.id} value={t.nama}>{t.nama}</option>
+              ))}
+            </select>
+
+            <label className="lbl" htmlFor="ckTarikh">Tarikh</label>
+            <input
+              id="ckTarikh"
+              type="date"
+              className="inp"
+              value={checkTarikh}
+              onChange={(e) => { setCheckTarikh(e.target.value); setCheckRows(null); setCheckInfo(''); }}
+            />
+
+            <button
+              type="button"
+              className="btn semakBtn"
+              onClick={semakRekod}
+              disabled={checkLoading || !checkNama || !checkTarikh}
+            >
+              {checkLoading ? 'Menyemak…' : 'Semak Rekod'}
+            </button>
+
+            {optsError && <p className="hint err">{optsError}</p>}
+            {checkError && <p className="hint err">{checkError}</p>}
+            {checkInfo && <p className="okMsg" role="status">{checkInfo}</p>}
+
+            {checkRows !== null &&
+              (checkRows.length === 0 ? (
+                <p className="emptyMsg">Tiada rekod aktif ditemui.</p>
+              ) : (
+                <div className="recList">
+                  {checkRows.map((r) => (
+                    <div className="rec" key={r.id}>
+                      <div className="recRow"><span className="recK">Tarikh</span><span className="recV">{fmtTarikh(String(r.tarikh).slice(0, 10))} ({r.hari})</span></div>
+                      <div className="recRow"><span className="recK">Sebab</span><span className="recV">{labelSebab(r.sebabKategori)}</span></div>
+                      <div className="recRow"><span className="recK">Jenis</span><span className="recV">{labelJenis(r.jenis)}</span></div>
+                      {r.jenis === 'SEPARUH_HARI' && (r.masaMula || r.masaTamat) && (
+                        <div className="recRow"><span className="recK">Masa</span><span className="recV">
+                          {/^\d{1,2}:\d{2}$/.test(r.masaMula || '')
+                            ? fmtMasaRange(r.masaMula, r.masaTamat)
+                            : `${r.masaMula || '-'} – ${r.masaTamat || 'Tamat sekolah'}`}
+                        </span></div>
+                      )}
+                      {r.sebabDetail && (
+                        <div className="recRow"><span className="recK">Catatan</span><span className="recV">{r.sebabDetail}</span></div>
+                      )}
+                      <div className="recRow"><span className="recK">Status</span><span className="recV"><span className={`sBadge ${r.statusBorang.toLowerCase()}`}>{STATUS_LABEL[r.statusBorang] || r.statusBorang}</span></span></div>
+                      {r.statusBorang === 'AKTIF' && (
+                        <button
+                          type="button"
+                          className="btn danger full"
+                          onClick={() => batalRekod(r.id)}
+                          disabled={checkBusyId === r.id}
+                        >
+                          {checkBusyId === r.id ? 'Membatalkan…' : 'Batal Rekod'}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ))}
+          </div>
+        ) : result ? (
           <div className="done" role="status" aria-live="polite">
             <span className="check" aria-hidden="true">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
@@ -748,6 +895,99 @@ export default function Page() {
         }
         .btn.ghost:hover:not(:disabled) {
           background: #e7eeec;
+        }
+        .btn.danger {
+          color: #fff;
+          background: #b42318;
+        }
+        .btn.danger:hover:not(:disabled) {
+          background: #921a12;
+        }
+        .btn.full {
+          width: 100%;
+          margin-top: 12px;
+        }
+        .tabSeg {
+          margin: 4px 0 18px;
+        }
+        .semakBtn {
+          width: 100%;
+          margin-top: 16px;
+        }
+        .okMsg {
+          margin: 12px 0 0;
+          padding: 10px 12px;
+          font-size: 13.5px;
+          font-weight: 600;
+          color: #0b5e57;
+          background: #e6f4f0;
+          border: 1px solid #c2e3da;
+          border-radius: 9px;
+        }
+        .emptyMsg {
+          margin: 18px 0 4px;
+          padding: 18px;
+          text-align: center;
+          font-size: 14px;
+          color: #5f7a72;
+          background: #f4f7f6;
+          border: 1px dashed #cdd9d4;
+          border-radius: 10px;
+        }
+        .recList {
+          margin-top: 18px;
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+        }
+        .rec {
+          padding: 14px 16px;
+          background: #fafcfb;
+          border: 1px solid #e3ebe8;
+          border-radius: 12px;
+        }
+        .recRow {
+          display: flex;
+          justify-content: space-between;
+          gap: 14px;
+          padding: 7px 0;
+          border-bottom: 1px solid #eef2f0;
+        }
+        .recRow:last-of-type {
+          border-bottom: none;
+        }
+        .recK {
+          flex: none;
+          font-size: 13px;
+          color: #6b8079;
+        }
+        .recV {
+          font-size: 13.5px;
+          font-weight: 600;
+          color: #0f2a23;
+          text-align: right;
+        }
+        .sBadge {
+          display: inline-block;
+          padding: 3px 10px;
+          font-size: 12px;
+          font-weight: 600;
+          border-radius: 999px;
+        }
+        .sBadge.aktif {
+          color: #0b5e57;
+          background: #e6f4f0;
+          border: 1px solid #c2e3da;
+        }
+        .sBadge.dibatalkan {
+          color: #b42318;
+          background: #fef3f2;
+          border: 1px solid #fcd2cd;
+        }
+        .sBadge.selesai {
+          color: #1d4ed8;
+          background: #eaf0fe;
+          border: 1px solid #cdddfb;
         }
         .done {
           text-align: center;

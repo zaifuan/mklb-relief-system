@@ -15,7 +15,7 @@ import {
 } from '../lib/absenceConstants.js';
 import { hariDari, generateReference } from '../lib/absenceUtil.js';
 import { masaKeMinitAuto } from '../lib/absenceWindow.js';
-import { sendRealtime } from '../services/telegramNotify.service.js';
+import { sendRealtime, sendPembatalan } from '../services/telegramNotify.service.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -255,6 +255,96 @@ export async function createAbsence(req, res) {
         ? `${dicipta} rekod berjaya (${namaList.length} guru × ${jumlahHari} hari)${dilangkau ? `, ${dilangkau} dilangkau (sudah wujud)` : ''}.`
         : 'Semua rekod dalam penghantaran ini sudah wujud sebelum ini.',
     });
+  } catch (err) {
+    res.status(500).json({ success: false, mesej: err.message });
+  }
+}
+
+// GET /api/absence/public/check?guruNama=...&tarikh=YYYY-MM-DD  (awam, tiada login)
+// Pulangkan rekod (belum dipadam) bagi guru tersebut pada tarikh tersebut.
+export async function checkPublic(req, res) {
+  try {
+    const guruNama = String(req.query.guruNama || '').trim();
+    const tarikhStr = String(req.query.tarikh || '').trim();
+    if (!guruNama) return res.status(400).json({ success: false, mesej: 'Nama guru diperlukan' });
+    if (!DATE_RE.test(tarikhStr)) return res.status(400).json({ success: false, mesej: 'Tarikh tidak sah' });
+
+    const [y, m, d] = tarikhStr.split('-').map(Number);
+    const tarikhDate = new Date(Date.UTC(y, m - 1, d));
+
+    const records = await prisma.absenceRecord.findMany({
+      where: {
+        guruNama: { equals: guruNama, mode: 'insensitive' },
+        tarikh: tarikhDate,
+        deletedAt: null,
+      },
+      orderBy: [{ createdAt: 'asc' }],
+      select: {
+        id: true,
+        tarikh: true,
+        hari: true,
+        guruNama: true,
+        sebabKategori: true,
+        sebabDetail: true,
+        jenis: true,
+        masaMula: true,
+        masaTamat: true,
+        statusBorang: true,
+      },
+    });
+
+    res.json({ success: true, records, jumlah: records.length });
+  } catch (err) {
+    res.status(500).json({ success: false, mesej: err.message });
+  }
+}
+
+// PATCH /api/absence/public/:id/cancel  (awam — guru batal rekod sendiri)
+// Hanya rekod AKTIF. Tukar status → DIBATALKAN (TIDAK padam). Rekod tunggal sahaja
+// walaupun ada groupReference (tidak menjejaskan rekod lain dalam kumpulan).
+export async function cancelPublic(req, res) {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ success: false, mesej: 'ID tidak sah' });
+
+    const existing = await prisma.absenceRecord.findUnique({ where: { id } });
+    if (!existing || existing.deletedAt) {
+      return res.status(404).json({ success: false, mesej: 'Rekod tidak dijumpai' });
+    }
+
+    // Safeguard ringan (tiada login): jika nama dihantar, mesti sepadan dengan rekod.
+    const guruNama = String(req.body?.guruNama || '').trim();
+    if (guruNama && guruNama.toLowerCase() !== existing.guruNama.toLowerCase()) {
+      return res.status(403).json({ success: false, mesej: 'Nama guru tidak sepadan dengan rekod ini.' });
+    }
+
+    if (existing.statusBorang !== 'AKTIF') {
+      return res
+        .status(409)
+        .json({ success: false, mesej: `Rekod ini sudah ${existing.statusBorang.toLowerCase()}, tidak boleh dibatalkan.` });
+    }
+
+    const updated = await prisma.absenceRecord.update({
+      where: { id },
+      data: { statusBorang: 'DIBATALKAN' },
+    });
+
+    await writeAudit({
+      userId: null,
+      action: 'ABSENCE_CANCEL_PUBLIC',
+      entity: 'ABSENCE',
+      detail: { reference: existing.reference, guru: existing.guruNama, oleh: 'guru (awam)' },
+      ip: getClientIp(req),
+    });
+
+    // Telegram pembatalan (servis sedia ada; gate kendali "hari ini") — tidak blok
+    try {
+      await sendPembatalan(existing, { userId: null, ip: getClientIp(req) });
+    } catch (e) {
+      console.error('sendPembatalan (cancelPublic) ERROR:', e.message);
+    }
+
+    res.json({ success: true, record: updated, mesej: 'Rekod telah dibatalkan.' });
   } catch (err) {
     res.status(500).json({ success: false, mesej: err.message });
   }
