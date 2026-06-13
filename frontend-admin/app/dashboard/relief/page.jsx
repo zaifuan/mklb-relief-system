@@ -6,6 +6,7 @@ import { api } from '../../../lib/api.js';
 
 const STATUS_BATCH = { DRAF: 'Draf', DIJANA: 'Dijana', DIHANTAR: 'Dihantar', SELESAI: 'Selesai' };
 const TERKUNCI = ['DIHANTAR', 'SELESAI'];
+const TIADA = 'TIADA_PENGGANTI'; // nilai stabil; dipapar sebagai "TIADA PENGGANTI"
 
 function todayKL() {
   try {
@@ -269,16 +270,21 @@ export default function ReliefDashboard() {
     }
   }
 
-  async function act(id, kind) {
-    if (rowBusy) return;
+  async function tukarGuru(id, guruGanti) {
+    if (rowBusy || locked) return;
     setRowBusy(id);
     setError('');
     try {
-      if (kind === 'confirm') await api.relief.confirm(id);
-      else await api.relief.cancel(id);
-      await load(tarikh);
+      await api.relief.updateTeacher(id, guruGanti);
+      // Kemas kini setempat (tidak perlu reload penuh) — kekalkan status & calon
+      setData((d) =>
+        d
+          ? { ...d, assignments: d.assignments.map((a) => (a.id === id ? { ...a, guruGanti } : a)) }
+          : d
+      );
     } catch (e) {
-      setError(e.message || 'Gagal mengemas kini baris');
+      setError(e.message || 'Gagal menukar guru ganti');
+      await load(tarikh); // selaras semula jika gagal
     } finally {
       setRowBusy(0);
     }
@@ -290,7 +296,9 @@ export default function ReliefDashboard() {
     return {
       guruAbsen: new Set(rows.map((a) => a.guruTakHadir)).size,
       slot: rows.length,
-      ganti: new Set(rows.filter((a) => a.guruGanti).map((a) => a.guruGanti.trim().toUpperCase())).size,
+      ganti: new Set(
+        rows.filter((a) => a.guruGanti && a.guruGanti !== TIADA).map((a) => a.guruGanti.trim().toUpperCase())
+      ).size,
     };
   }, [data]);
 
@@ -306,11 +314,27 @@ export default function ReliefDashboard() {
     });
   }, [data]);
 
-  function badgeFor(a) {
-    if (!a.guruGanti) return { cls: 'tiada', label: 'Tiada Guru Ganti' };
-    if (a.status === 'DISAHKAN') return { cls: 'disahkan', label: 'Disahkan' };
-    if (a.status === 'BATAL') return { cls: 'batal', label: 'Batal' };
-    return { cls: 'belum', label: 'Belum Disahkan' };
+  // Dropdown guru ganti — nama sahaja + "TIADA PENGGANTI"; sentiasa boleh diubah
+  function gantiSelect(a) {
+    const cands = a.candidates || [];
+    return (
+      <select
+        className="inp gantiSel"
+        aria-label="Guru ganti"
+        value={a.guruGanti || ''}
+        disabled={locked || rowBusy === a.id}
+        onChange={(e) => tukarGuru(a.id, e.target.value)}
+      >
+        <option value="" disabled>— Pilih guru ganti —</option>
+        <option value={TIADA}>TIADA PENGGANTI</option>
+        {a.guruGanti && a.guruGanti !== TIADA && !cands.some((c) => c.nama === a.guruGanti) && (
+          <option value={a.guruGanti}>{a.guruGanti}</option>
+        )}
+        {cands.map((c) => (
+          <option key={c.nama} value={c.nama}>{c.nama}</option>
+        ))}
+      </select>
+    );
   }
 
   const ssCur = SS_TABS.find((t) => t.key === ssTab);
@@ -469,7 +493,7 @@ export default function ReliefDashboard() {
         {locked && (
           <div className="notice locked" role="status">
             Batch ini berstatus <b>{STATUS_BATCH[data.status] || data.status}</b> dan telah dikunci.
-            Jana semula serta sahkan/batal baris tidak dibenarkan.
+            Jana semula serta perubahan guru ganti tidak dibenarkan.
           </div>
         )}
         {error && <div className="alert" role="alert">{error}</div>}
@@ -491,10 +515,17 @@ export default function ReliefDashboard() {
               Tarikh {fmtDate(tarikh)}
               {data.generatedBy ? ` · dijana oleh ${data.generatedBy} • ${fmtDateTime(data.generatedAt)}` : ''}
             </p>
+
+            {/* Bar tindakan utama */}
+            <div className="actionsBar">
+              <button className="btn ghost pdf" disabled title="Akan datang">
+                Jana PDF <span className="soon">Akan datang</span>
+              </button>
+            </div>
           </>
         )}
 
-        {/* Jadual ringkas */}
+        {/* Senarai relief — jadual compact (semua skrin; mobile boleh swipe kiri-kanan) */}
         {data && (
           <div className="tableWrap">
             <table className="tbl">
@@ -507,18 +538,16 @@ export default function ReliefDashboard() {
                   <th>Mula</th>
                   <th>Tamat</th>
                   <th className="cGanti">Guru Ganti</th>
-                  <th className="cAct">Status / Tindakan</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={8} className="empty">Memuatkan…</td></tr>
+                  <tr><td colSpan={7} className="empty">Memuatkan…</td></tr>
                 ) : rowsSorted.length === 0 ? (
-                  <tr><td colSpan={8} className="empty">Tiada baris relief.</td></tr>
+                  <tr><td colSpan={7} className="empty">Tiada baris relief.</td></tr>
                 ) : (
                   rowsSorted.map((a, i) => {
                     const { mula, tamat } = splitMasa(a.masa);
-                    const b = badgeFor(a);
                     return (
                       <tr key={a.id}>
                         <td className="cNo">{i + 1}</td>
@@ -528,28 +557,8 @@ export default function ReliefDashboard() {
                         <td className="mono">{mula}</td>
                         <td className="mono">{tamat}</td>
                         <td className="cGanti">
-                          {a.guruGanti ? (
-                            <select className="ganti" aria-label="Guru ganti">
-                              <option>{a.guruGanti}</option>
-                            </select>
-                          ) : (
-                            <span className="tiadaGanti">Tiada guru ganti</span>
-                          )}
-                        </td>
-                        <td className="cAct">
-                          <div className="actwrap">
-                            <span className={`badge ${b.cls}`}>{b.label}</span>
-                            {a.status === 'CADANGAN' && !locked && (
-                              <span className="act">
-                                <button className="mini ok" disabled={rowBusy === a.id} onClick={() => act(a.id, 'confirm')}>
-                                  {rowBusy === a.id ? '…' : 'Sahkan'}
-                                </button>
-                                <button className="mini no" disabled={rowBusy === a.id} onClick={() => act(a.id, 'cancel')}>
-                                  Batal
-                                </button>
-                              </span>
-                            )}
-                          </div>
+                          {gantiSelect(a)}
+                          {rowBusy === a.id && <span className="saving"> …</span>}
                         </td>
                       </tr>
                     );
@@ -631,9 +640,21 @@ export default function ReliefDashboard() {
         .panel { background: #fff; border: 1px solid #dce5e2; border-radius: 12px; }
         .empty { text-align: center; color: #80958e; padding: 28px 16px; }
 
+        /* Bar tindakan utama */
+        .actionsBar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 4px 0 16px; }
+        .btn.big { padding: 12px 20px; font-size: 15px; border-radius: 11px; }
+        .btn:disabled { opacity: .55; cursor: not-allowed; }
+        .btn.pdf { display: inline-flex; align-items: center; gap: 8px; }
+        .btn.pdf .soon { font-size: 11px; font-weight: 600; color: #8a6d12; background: #faf3df; border: 1px solid #ecdcae; border-radius: 999px; padding: 2px 8px; }
+
+        .gantiSel { width: 100%; cursor: pointer; }
+        .gantiSel:focus-visible { border-color: #0f766e; box-shadow: 0 0 0 3px rgba(15,118,110,0.15); }
+        .gantiSel:disabled { background: #f4f7f6; color: #5f7a72; cursor: not-allowed; }
+        .saving { display: inline-block; margin-left: 6px; font-size: 12px; color: #5f7a72; }
+
         /* Jadual */
         .tableWrap { overflow-x: auto; background: #fff; border: 1px solid #dce5e2; border-radius: 14px; -webkit-overflow-scrolling: touch; }
-        .tbl { width: 100%; border-collapse: collapse; min-width: 960px; font-size: 13.5px; }
+        .tbl { width: 100%; border-collapse: collapse; min-width: 880px; font-size: 13.5px; }
         .tbl th { text-align: left; padding: 12px 14px; background: #0f766e; color: #fff; font-weight: 600; font-size: 12.5px; white-space: nowrap; }
         .tbl th:first-child { border-top-left-radius: 14px; }
         .tbl th:last-child { border-top-right-radius: 14px; }
@@ -648,13 +669,8 @@ export default function ReliefDashboard() {
         .kelas { display: inline-block; font-weight: 700; font-size: 12.5px; color: #0f2a23; white-space: nowrap; }
         .subj { display: inline-block; padding: 2px 9px; font-size: 11px; font-weight: 700; letter-spacing: .02em; color: #3b5bdb; background: #eef2ff; border: 1px solid #dbe4ff; border-radius: 999px; white-space: nowrap; }
 
-        .cGanti { min-width: 240px; }
-        .ganti { width: 100%; max-width: 320px; padding: 8px 10px; font-size: 13px; color: #233a33; background: #fff; border: 1px solid #d3ded9; border-radius: 9px; outline: none; cursor: pointer; }
-        .ganti:focus-visible { border-color: #0f766e; box-shadow: 0 0 0 3px rgba(15,118,110,0.15); }
-        .tiadaGanti { display: inline-block; font-size: 12.5px; font-weight: 600; color: #b42318; background: #fef3f2; border: 1px solid #fcd2cd; border-radius: 9px; padding: 7px 12px; white-space: nowrap; }
-
-        .cAct { min-width: 210px; }
-        .actwrap { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .cGanti { min-width: 300px; }
+        .cGanti .gantiSel { max-width: 380px; padding: 8px 10px; font-size: 13px; }
         .badge { display: inline-block; padding: 3px 10px; font-size: 12px; font-weight: 600; border-radius: 999px; white-space: nowrap; }
         .badge.disahkan { color: #0b5e57; background: #e6f4f0; border: 1px solid #c2e3da; }
         .badge.belum { color: #8a6d12; background: #faf3df; border: 1px solid #ecdcae; }

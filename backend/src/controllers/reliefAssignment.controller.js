@@ -10,6 +10,7 @@
 //    • TIDAK menyentuh Relief Engine — hanya kemas kini status satu baris.
 // ════════════════════════════════════════════════════════════
 
+import { z } from 'zod';
 import prisma from '../lib/prisma.js';
 import { writeAudit, getClientIp } from '../lib/audit.js';
 
@@ -86,4 +87,53 @@ export function confirmAssignment(req, res) {
 // ── PATCH /api/relief/assignment/:id/cancel ──
 export function cancelAssignment(req, res) {
   return transisi(req, res, { toStatus: 'BATAL', action: 'RELIEF_CANCEL' });
+}
+
+// ── PATCH /api/relief/assignment/:id/teacher ──────────────
+// Tukar guru ganti (tanpa perlu sahkan baris). Status kekal.
+// Disekat jika batch DIHANTAR/SELESAI atau baris BATAL.
+const teacherSchema = z.object({ guruGanti: z.string().trim().min(1, 'Nama guru ganti diperlukan') });
+
+export async function updateTeacher(req, res) {
+  const id = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ mesej: 'ID baris tidak sah' });
+
+  const parsed = teacherSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ mesej: parsed.error.errors[0]?.message || 'Input tidak sah' });
+  }
+
+  try {
+    const baris = await prisma.reliefAssignment.findUnique({ where: { id }, include: { batch: true } });
+    if (!baris) return res.status(404).json({ mesej: 'Baris relief tidak dijumpai' });
+
+    if (baris.batch && BATCH_TERKUNCI.includes(baris.batch.status)) {
+      return res.status(409).json({
+        mesej: `Batch sudah ${baris.batch.status} — baris tidak boleh diubah.`,
+        statusBatch: baris.batch.status,
+      });
+    }
+    if (baris.status === 'BATAL') {
+      return res.status(409).json({ mesej: 'Baris telah dibatalkan — tidak boleh diubah.' });
+    }
+
+    const guruGanti = parsed.data.guruGanti.trim();
+    const updated = await prisma.reliefAssignment.update({
+      where: { id },
+      data: { guruGanti, updatedBy: req.user?.username || null },
+    });
+
+    await writeAudit({
+      userId: req.user?.id || null,
+      action: 'RELIEF_EDIT_TEACHER',
+      entity: `relief_assignment:${id}`,
+      detail: { dari: baris.guruGanti, ke: guruGanti, kelas: baris.kelas, masa: baris.masa },
+      ip: getClientIp(req),
+    });
+
+    res.json({ id: updated.id, guruGanti: updated.guruGanti, status: updated.status });
+  } catch (err) {
+    console.error('updateTeacher ERROR:', err);
+    res.status(500).json({ mesej: 'Ralat menukar guru ganti', error: err.message });
+  }
 }

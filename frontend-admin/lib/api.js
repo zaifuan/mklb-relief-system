@@ -83,6 +83,9 @@ export const api = {
     generate: (tarikh) => request('/api/relief/generate', { method: 'POST', body: { tarikh } }),
     confirm: (id) => request(`/api/relief/assignment/${id}/confirm`, { method: 'PATCH' }),
     cancel: (id) => request(`/api/relief/assignment/${id}/cancel`, { method: 'PATCH' }),
+    updateTeacher: (id, guruGanti) =>
+      request(`/api/relief/assignment/${id}/teacher`, { method: 'PATCH', body: { guruGanti } }),
+    confirmAll: (tarikh) => request(`/api/relief/${tarikh}/confirm-all`, { method: 'PATCH' }),
   },
 
   // Telegram snapshot ketidakhadiran (Fasa 8)
