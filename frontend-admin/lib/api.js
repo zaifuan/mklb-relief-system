@@ -55,6 +55,13 @@ export const api = {
     update: (payload) => request('/api/admin/accounts', { method: 'PATCH', body: payload }),
   },
 
+  specialSettings: {
+    options: () => request('/api/special-settings/options'),
+    list: (tarikh) => request(`/api/special-settings?tarikh=${encodeURIComponent(tarikh)}`),
+    create: (payload) => request('/api/special-settings', { method: 'POST', body: payload }),
+    remove: (id) => request(`/api/special-settings/${id}`, { method: 'DELETE' }),
+  },
+
   // Pilihan awam (senarai guru + label sebab/jenis) untuk dropdown penapis
   publicOptions: () => request('/api/absence/public/options', { auth: false }),
 
