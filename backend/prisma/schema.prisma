@@ -46,6 +46,34 @@ enum RoleName {
   ADMIN
 }
 
+enum SpecialSettingType {
+  TEACHER_EXCLUSION
+  CLASS_EXCLUSION
+  PRIORITY_CLASS
+}
+
+enum SpecialSettingScope {
+  FULL_DAY
+  TIME_RANGE
+}
+
+// Tetapan Khas Jadual — berkuat kuasa pada SATU tarikh sahaja (tidak kekal).
+model DailySpecialSetting {
+  id        Int                 @id @default(autoincrement())
+  tarikh    DateTime            @db.Date
+  jenis     SpecialSettingType
+  target    String // nama guru (TEACHER_EXCLUSION) atau nama kelas (CLASS/PRIORITY)
+  scope     SpecialSettingScope @default(FULL_DAY)
+  masaMula  String? // "HH:MM" (24-jam); null untuk FULL_DAY
+  masaTamat String? // "HH:MM"; null = "Tamat sekolah" (untuk TIME_RANGE) atau FULL_DAY
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+
+  @@unique([tarikh, jenis, target])
+  @@index([tarikh])
+  @@map("daily_special_settings")
+}
+
 enum TelegramJenis {
   SNAPSHOT
   REALTIME

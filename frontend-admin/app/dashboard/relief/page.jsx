@@ -49,6 +49,41 @@ function splitMasa(masa) {
   return { mula: clean.slice(0, i).trim(), tamat: clean.slice(i + 1).trim() };
 }
 
+// Tab Tetapan Khas Jadual (dalam page relief)
+const SS_TABS = [
+  { key: 'guru', label: 'Guru', jenis: 'TEACHER_EXCLUSION', src: 'teachers', listKey: 'teacherExclusions', mark: '✓', pilih: 'Pilih guru', empty: 'Tiada guru dikecualikan.', nota: 'Guru hadir tetapi tidak boleh menerima relief (cth: bertugas peperiksaan, lawatan, pengacara).' },
+  { key: 'kelas', label: 'Kelas', jenis: 'CLASS_EXCLUSION', src: 'classes', listKey: 'classExclusions', mark: '✓', pilih: 'Pilih kelas', empty: 'Tiada kelas dikecualikan.', nota: 'Kelas tidak perlu relief walaupun guru asal tidak hadir (cth: program sekolah, ceramah, dewan peperiksaan).' },
+  { key: 'keutamaan', label: 'Keutamaan', jenis: 'PRIORITY_CLASS', src: 'classes', listKey: 'priorityClasses', mark: '★', pilih: 'Pilih kelas', empty: 'Tiada kelas keutamaan.', nota: 'Kelas ini didahulukan ketika jana relief (cth: STAM, kelas peperiksaan).' },
+];
+
+// Label masa "HH:MM" (24-jam) → "08:00 pagi" / "12:00 tengah hari" / "01:00 petang"
+function labelMasa(hhmm) {
+  if (!hhmm) return '';
+  const [h, m] = String(hhmm).split(':').map(Number);
+  const mm = String(m || 0).padStart(2, '0');
+  if (h < 12) return `${String(h).padStart(2, '0')}:${mm} pagi`;
+  if (h === 12) return `12:${mm} tengah hari`;
+  return `${String(h - 12).padStart(2, '0')}:${mm} petang`;
+}
+// Senarai masa formal (sama gaya borang) — 07:00 hingga 15:00, langkah 30 minit
+const MASA_LIST = (() => {
+  const out = [];
+  for (let t = 7 * 60; t <= 15 * 60; t += 30) {
+    const h = Math.floor(t / 60);
+    const m = t % 60;
+    const v = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    out.push({ value: v, label: labelMasa(v) });
+  }
+  return out;
+})();
+// Paparan scope/masa untuk senarai aktif
+function fmtScope(item) {
+  if (item.scope !== 'TIME_RANGE') return 'Sepanjang Hari';
+  const mula = item.masaMula ? labelMasa(item.masaMula) : '?';
+  const tamat = item.masaTamat ? labelMasa(item.masaTamat) : 'Tamat sekolah';
+  return `${mula} – ${tamat}`;
+}
+
 export default function ReliefDashboard() {
   const [tarikh, setTarikh] = useState(() => todayKL());
   const [data, setData] = useState(null);
@@ -57,6 +92,21 @@ export default function ReliefDashboard() {
   const [rowBusy, setRowBusy] = useState(0);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+
+  // ── Tetapan Khas Jadual (dalam page relief) ──
+  const [ssOpts, setSsOpts] = useState({ teachers: [], classes: [] });
+  const [ssData, setSsData] = useState(null);
+  const [ssTab, setSsTab] = useState('guru');
+  const [ssChips, setSsChips] = useState([]); // target dipilih (multi-select)
+  const [ssScope, setSsScope] = useState('FULL_DAY');
+  const [ssMula, setSsMula] = useState('');
+  const [ssTamat, setSsTamat] = useState(''); // '' = Tamat sekolah
+  const [ssModal, setSsModal] = useState(false);
+  const [mScope, setMScope] = useState('FULL_DAY'); // temp dalam modal
+  const [mMula, setMMula] = useState('');
+  const [mTamat, setMTamat] = useState('');
+  const [ssBusy, setSsBusy] = useState(false);
+  const [ssError, setSsError] = useState('');
 
   const locked = !!data && TERKUNCI.includes(data.status);
 
@@ -82,6 +132,113 @@ export default function ReliefDashboard() {
   useEffect(() => {
     load(tarikh);
   }, [tarikh, load]);
+
+  // Muat senarai guru/kelas sekali
+  useEffect(() => {
+    let alive = true;
+    api.specialSettings
+      .options()
+      .then((o) => {
+        if (alive) setSsOpts({ teachers: o.teachers || [], classes: o.classes || [] });
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Muat tetapan khas bila tarikh berubah
+  const loadSs = useCallback(async (t) => {
+    if (!t) {
+      setSsData(null);
+      return;
+    }
+    try {
+      const d = await api.specialSettings.list(t);
+      setSsData(d);
+    } catch (e) {
+      setSsError(e.message || 'Gagal memuat tetapan khas.');
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSs(tarikh);
+  }, [tarikh, loadSs]);
+
+  function ssTukarTab(key) {
+    setSsTab(key);
+    setSsChips([]);
+    setSsScope('FULL_DAY');
+    setSsMula('');
+    setSsTamat('');
+    setSsError('');
+  }
+  function tambahChip(nama) {
+    if (!nama) return;
+    setSsChips((list) => (list.includes(nama) ? list : [...list, nama]));
+  }
+  function buangChip(nama) {
+    setSsChips((list) => list.filter((n) => n !== nama));
+  }
+  function bukaModal() {
+    setMScope(ssScope);
+    setMMula(ssMula);
+    setMTamat(ssTamat);
+    setSsModal(true);
+  }
+  function sahkanModal() {
+    if (mScope === 'TIME_RANGE') {
+      if (!mMula) {
+        setSsError('Sila pilih masa mula.');
+        return;
+      }
+      if (mTamat && mTamat <= mMula) {
+        setSsError('Masa tamat mesti selepas masa mula.');
+        return;
+      }
+    }
+    setSsScope(mScope);
+    setSsMula(mScope === 'TIME_RANGE' ? mMula : '');
+    setSsTamat(mScope === 'TIME_RANGE' ? mTamat : '');
+    setSsError('');
+    setSsModal(false);
+  }
+  async function ssTambah() {
+    const cur = SS_TABS.find((t) => t.key === ssTab);
+    if (ssChips.length === 0 || ssBusy || !tarikh) return;
+    setSsBusy(true);
+    setSsError('');
+    try {
+      const payload = { tarikh, jenis: cur.jenis, targets: ssChips, scope: ssScope };
+      if (ssScope === 'TIME_RANGE') {
+        payload.masaMula = ssMula;
+        payload.masaTamat = ssTamat || null; // '' = Tamat sekolah
+      }
+      await api.specialSettings.create(payload);
+      setSsChips([]);
+      setSsScope('FULL_DAY');
+      setSsMula('');
+      setSsTamat('');
+      await loadSs(tarikh);
+    } catch (e) {
+      setSsError(e.message || 'Gagal menambah tetapan.');
+    } finally {
+      setSsBusy(false);
+    }
+  }
+  async function ssPadam(id) {
+    if (ssBusy) return;
+    setSsBusy(true);
+    setSsError('');
+    try {
+      await api.specialSettings.remove(id);
+      await loadSs(tarikh);
+    } catch (e) {
+      setSsError(e.message || 'Gagal memadam tetapan.');
+    } finally {
+      setSsBusy(false);
+    }
+  }
 
   async function jana(isRegen) {
     if (busy || locked) return;
@@ -156,6 +313,16 @@ export default function ReliefDashboard() {
     return { cls: 'belum', label: 'Belum Disahkan' };
   }
 
+  const ssCur = SS_TABS.find((t) => t.key === ssTab);
+  const ssSource = ssCur.src === 'teachers' ? ssOpts.teachers : ssOpts.classes;
+  const ssActive = ssData ? ssData[ssCur.listKey] || [] : [];
+  const ssActiveSet = new Set(ssActive.map((x) => x.target));
+  const ssAvail = ssSource.filter((x) => !ssActiveSet.has(x) && !ssChips.includes(x));
+  const ssScopeLabel =
+    ssScope === 'TIME_RANGE'
+      ? `${ssMula ? labelMasa(ssMula) : '?'} – ${ssTamat ? labelMasa(ssTamat) : 'Tamat sekolah'}`
+      : 'Sepanjang Hari';
+
   return (
     <div className="wrap">
       <header className="bar">
@@ -166,7 +333,7 @@ export default function ReliefDashboard() {
       </header>
 
       <main className="main">
-        {/* Toolbar */}
+        {/* Tarikh */}
         <div className="toolbar">
           <input
             type="date"
@@ -175,6 +342,114 @@ export default function ReliefDashboard() {
             onChange={(e) => setTarikh(e.target.value)}
             aria-label="Tarikh"
           />
+        </div>
+
+        {/* Tetapan Khas Jadual — sebelum Jana Relief */}
+        {!locked && (
+          <section className="ss">
+            <div className="ssHead">Tetapan Khas Jadual</div>
+            <p className="ssSub">Berkuat kuasa pada tarikh dipilih sahaja. Tetapkan sebelum Jana Relief.</p>
+            <div className="ssTabs" role="tablist" aria-label="Jenis tetapan">
+              {SS_TABS.map((t) => (
+                <button
+                  key={t.key}
+                  role="tab"
+                  aria-selected={ssTab === t.key}
+                  className={`ssTab ${ssTab === t.key ? 'on' : ''}`}
+                  onClick={() => ssTukarTab(t.key)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <p className="ssNota">{ssCur.nota}</p>
+            {ssError && <div className="alert" role="alert">{ssError}</div>}
+
+            {/* Multi-select → chip */}
+            <select
+              className="inp grow"
+              value=""
+              onChange={(e) => { tambahChip(e.target.value); e.target.value = ''; }}
+              aria-label={ssCur.pilih}
+            >
+              <option value="">{ssCur.pilih} (boleh lebih dari satu)…</option>
+              {ssAvail.map((x) => (
+                <option key={x} value={x}>{x}</option>
+              ))}
+            </select>
+            {ssChips.length > 0 && (
+              <div className="chips">
+                {ssChips.map((nama) => (
+                  <span className="chip" key={nama}>
+                    {nama}
+                    <button type="button" className="chipX" onClick={() => buangChip(nama)} aria-label={`Buang ${nama}`}>×</button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Masa + Tambah */}
+            <div className="ssMasaRow">
+              <button type="button" className="btn ghost ssMasaBtn" onClick={bukaModal}>
+                Tetapkan Masa: <b>{ssScopeLabel}</b>
+              </button>
+              <button className="btn add" onClick={ssTambah} disabled={ssChips.length === 0 || ssBusy}>
+                {ssBusy ? 'Menambah…' : `+ Tambah${ssChips.length ? ` (${ssChips.length})` : ''}`}
+              </button>
+            </div>
+
+            {ssActive.length === 0 ? (
+              <p className="ssEmpty">{ssCur.empty}</p>
+            ) : (
+              <ul className="ssList">
+                {ssActive.map((item) => (
+                  <li className="ssItem" key={item.id}>
+                    <span className="ssMark">{ssCur.mark}</span>
+                    <span className="ssInfo">
+                      <span className="ssTarget">{item.target}</span>
+                      <span className="ssMasa">{fmtScope(item)}</span>
+                    </span>
+                    <button className="ssDel" onClick={() => ssPadam(item.id)} disabled={ssBusy} aria-label={`Padam ${item.target}`}>×</button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
+
+        {/* Modal: Tetapkan Masa */}
+        {ssModal && (
+          <div className="modalBg" role="dialog" aria-modal="true" onClick={() => setSsModal(false)}>
+            <div className="modal" onClick={(e) => e.stopPropagation()}>
+              <div className="modalTitle">Tetapkan Masa</div>
+              <div className="seg2" role="radiogroup" aria-label="Skop masa">
+                <button type="button" role="radio" aria-checked={mScope === 'FULL_DAY'} className={`seg2Btn ${mScope === 'FULL_DAY' ? 'on' : ''}`} onClick={() => setMScope('FULL_DAY')}>Sepanjang Hari</button>
+                <button type="button" role="radio" aria-checked={mScope === 'TIME_RANGE'} className={`seg2Btn ${mScope === 'TIME_RANGE' ? 'on' : ''}`} onClick={() => setMScope('TIME_RANGE')}>Masa Tertentu</button>
+              </div>
+              {mScope === 'TIME_RANGE' && (
+                <div className="mFields">
+                  <label className="mLbl" htmlFor="mMula">Masa mula</label>
+                  <select id="mMula" className="inp" value={mMula} onChange={(e) => setMMula(e.target.value)}>
+                    <option value="">Pilih masa mula…</option>
+                    {MASA_LIST.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                  <label className="mLbl" htmlFor="mTamat">Masa tamat</label>
+                  <select id="mTamat" className="inp" value={mTamat} onChange={(e) => setMTamat(e.target.value)}>
+                    <option value="">Tamat sekolah</option>
+                    {MASA_LIST.filter((o) => !mMula || o.value > mMula).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </div>
+              )}
+              <div className="modalBtns">
+                <button type="button" className="btn ghost" onClick={() => setSsModal(false)}>Batal</button>
+                <button type="button" className="btn" onClick={sahkanModal}>Sahkan</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Tindakan: Jana / Refresh */}
+        <div className="toolbar">
           {data && !locked ? (
             <button className="btn" onClick={() => jana(true)} disabled={busy}>
               {busy ? 'Menjana…' : 'Jana Semula'}
@@ -314,6 +589,43 @@ export default function ReliefDashboard() {
         .meta { margin: 0 0 16px; font-size: 12.5px; color: #5b716a; }
 
         .alert { margin: 0 0 14px; padding: 10px 12px; font-size: 13px; color: #b42318; background: #fef3f2; border: 1px solid #fcd2cd; border-radius: 9px; }
+        .ss { margin: 0 0 16px; padding: 16px; background: #fafcfb; border: 1px solid #dce5e2; border-radius: 14px; }
+        .ssHead { font-size: 15px; font-weight: 700; color: #0f2a23; }
+        .ssSub { margin: 4px 0 12px; font-size: 12.5px; color: #5b716a; }
+        .ssTabs { display: flex; gap: 6px; padding: 4px; background: #eef3f1; border-radius: 11px; }
+        .ssTab { flex: 1; padding: 9px 8px; font-size: 13.5px; font-weight: 600; color: #2b3f39; background: transparent; border: none; border-radius: 8px; cursor: pointer; }
+        .ssTab.on { color: #fff; background: #0f766e; }
+        .ssNota { margin: 10px 0 12px; font-size: 12px; color: #6b8079; line-height: 1.5; }
+        .ssAdder { display: flex; gap: 8px; align-items: stretch; }
+        .grow { flex: 1; }
+        .add { flex: none; padding: 0 16px; white-space: nowrap; }
+        .ssList { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+        .ssItem { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #fff; border: 1px solid #e3ebe8; border-radius: 10px; }
+        .ssMark { flex: none; color: #0f766e; font-weight: 700; }
+        .ssTarget { font-size: 14px; font-weight: 600; color: #0f2a23; }
+        .ssInfo { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        .ssMasa { font-size: 12px; color: #5f7a72; }
+        .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+        .chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 6px 6px 12px; font-size: 13px; font-weight: 600; color: #0b5e57; background: #e6f4f0; border: 1px solid #c2e3da; border-radius: 999px; }
+        .chipX { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; font-size: 16px; line-height: 1; color: #0b5e57; background: rgba(11,94,87,0.12); border: none; border-radius: 50%; cursor: pointer; }
+        .chipX:hover { background: rgba(11,94,87,0.22); }
+        .ssMasaRow { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin-top: 12px; }
+        .ssMasaBtn { flex: 1; text-align: left; min-width: 180px; }
+        .modalBg { position: fixed; inset: 0; background: rgba(15,42,35,0.45); display: flex; align-items: center; justify-content: center; padding: 18px; z-index: 50; }
+        .modal { width: 100%; max-width: 380px; background: #fff; border-radius: 16px; padding: 20px; box-shadow: 0 20px 50px -20px rgba(15,42,35,0.5); }
+        .modalTitle { font-size: 16px; font-weight: 700; color: #0f2a23; margin-bottom: 14px; }
+        .seg2 { display: flex; gap: 6px; padding: 4px; background: #eef3f1; border-radius: 11px; }
+        .seg2Btn { flex: 1; padding: 9px 8px; font-size: 13.5px; font-weight: 600; color: #2b3f39; background: transparent; border: none; border-radius: 8px; cursor: pointer; }
+        .seg2Btn.on { color: #fff; background: #0f766e; }
+        .mFields { margin-top: 14px; }
+        .mLbl { display: block; font-size: 13px; font-weight: 600; color: #2b3f39; margin: 10px 0 6px; }
+        .modalBtns { display: flex; gap: 8px; margin-top: 18px; }
+        .modalBtns .btn { flex: 1; }
+        .ssEmpty { margin: 14px 0 0; padding: 16px; text-align: center; font-size: 13px; color: #5f7a72; background: #fff; border: 1px dashed #cdd9d4; border-radius: 10px; }
+        .ssDel { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; font-size: 18px; line-height: 1; color: #b42318; background: #fef3f2; border: 1px solid #fcd2cd; border-radius: 8px; cursor: pointer; }
+        .ssDel:hover:not(:disabled) { background: #fde3df; }
+        .ssDel:disabled { opacity: 0.5; cursor: not-allowed; }
+        .ssEmpty { margin: 14px 0 0; padding: 16px; text-align: center; font-size: 13px; color: #5f7a72; background: #fff; border: 1px dashed #cdd9d4; border-radius: 10px; }
         .notice { margin: 0 0 14px; padding: 10px 12px; font-size: 13px; color: #3b544c; background: #f1f5f4; border: 1px solid #d3ded9; border-radius: 9px; }
         .notice.locked { color: #92400e; background: #fef6e7; border-color: #f5e0b8; }
         .panel { background: #fff; border: 1px solid #dce5e2; border-radius: 12px; }

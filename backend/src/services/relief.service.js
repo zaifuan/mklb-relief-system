@@ -19,8 +19,8 @@ import prisma from '../lib/prisma.js';
 import { hariDari } from '../lib/absenceUtil.js';
 import { loadReliefConfig } from '../lib/reliefConfig.js';
 import { cariBestCalon } from './candidate.service.js';
-import { parseMasa } from '../lib/timeUtil.js';
-import { julatTidakHadir, slotDalamJulat } from '../lib/absenceWindow.js';
+import { parseMasa, masaBertindih } from '../lib/timeUtil.js';
+import { julatTidakHadir, slotDalamJulat, masaKeMinitAuto } from '../lib/absenceWindow.js';
 
 const norm = (s) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
 const isFreeKelas = (k) => String(k || '').trim().toUpperCase() === 'FREE';
@@ -52,7 +52,7 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
   const hUpper = hari.toUpperCase();
 
   // ── Muat semua data sekali gus ──
-  const [jadualRows, absentAll, teachers, exclusions, config, existingBatch] = await Promise.all([
+  const [jadualRows, absentAll, teachers, exclusions, config, existingBatch, specialSettings] = await Promise.all([
     prisma.teacherSchedule.findMany({ where: { hari: hUpper } }),
     prisma.absenceRecord.findMany({
       where: { tarikh: tarikhDate, statusBorang: 'AKTIF', deletedAt: null },
@@ -62,6 +62,7 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
     prisma.reliefExclusion.findMany({ where: { tarikh: tarikhDate } }),
     loadReliefConfig(),
     prisma.reliefBatch.findUnique({ where: { tarikh: tarikhDate }, include: { assignments: true } }),
+    prisma.dailySpecialSetting.findMany({ where: { tarikh: tarikhDate } }),
   ]);
 
   // Halang jana semula jika sudah DIHANTAR / SELESAI (keputusan #4)
@@ -78,7 +79,38 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
     subjek: r.subjek ? String(r.subjek).trim() : '',
   }));
 
-  // Pool calon = guru yang ada slot pada hari ini
+  // ── Tetapan Khas Jadual (harian) — peka scope FULL_DAY / TIME_RANGE ──
+  const normKelas = (k) => String(k || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  const HUJUNG = 1440; // "Tamat sekolah" (hujung hari) dalam minit
+  const buatJulat = (s) => {
+    if (s.scope === 'TIME_RANGE') {
+      const mula = masaKeMinitAuto(s.masaMula);
+      const tamat = s.masaTamat ? masaKeMinitAuto(s.masaTamat) : HUJUNG; // null = Tamat sekolah
+      return { full: false, mula: mula ?? 0, tamat: tamat ?? HUJUNG };
+    }
+    return { full: true, mula: 0, tamat: HUJUNG };
+  };
+  const guruKecualiList = []; // { n, full, mula, tamat } — TEACHER_EXCLUSION
+  const kelasKecualiList = []; // { k, full, mula, tamat } — CLASS_EXCLUSION
+  const kelasUtamaList = []; // { k, full, mula, tamat } — PRIORITY_CLASS
+  for (const s of specialSettings) {
+    const j = buatJulat(s);
+    if (s.jenis === 'TEACHER_EXCLUSION') guruKecualiList.push({ n: norm(s.target), ...j });
+    else if (s.jenis === 'CLASS_EXCLUSION') kelasKecualiList.push({ k: normKelas(s.target), ...j });
+    else if (s.jenis === 'PRIORITY_CLASS') kelasUtamaList.push({ k: normKelas(s.target), ...j });
+  }
+  // Adakah kelas dikecualikan / keutamaan untuk slot [mula,tamat]?
+  const kelasKecualiPadaSlot = (kelas, mula, tamat) => {
+    const k = normKelas(kelas);
+    return kelasKecualiList.some((e) => e.k === k && (e.full || masaBertindih(mula, tamat, e.mula, e.tamat)));
+  };
+  const kelasUtamaPadaSlot = (kelas, mula, tamat) => {
+    const k = normKelas(kelas);
+    return kelasUtamaList.some((e) => e.k === k && (e.full || masaBertindih(mula, tamat, e.mula, e.tamat)));
+  };
+
+  // Pool calon = guru yang ada slot pada hari ini.
+  // Pengecualian guru (peka masa) dikendalikan dalam cariBestCalon via guruKecualiList.
   const semuaGuruHari = [...new Set(jadualData.map((r) => r.guru))].filter(Boolean);
 
   // mapKategori { NAMA: KATEGORI }
@@ -144,7 +176,8 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
         const [mula, tamat] = parseMasa(r.masa);
         return { kelas: r.kelas, masa: r.masa, subjek: r.subjek, mula, tamat };
       })
-      .filter((s) => s.mula !== null);
+      .filter((s) => s.mula !== null)
+      .filter((s) => !kelasKecualiPadaSlot(s.kelas, s.mula, s.tamat)); // CLASS_EXCLUSION (peka masa)
 
     // SEPARUH_HARI → hanya slot yang BERTINDIH julat tidak hadir
     //   [masaMula, masaTamat || hujung hari]. Slot di luar julat: guru hadir,
@@ -162,60 +195,72 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
   // Susun guru ikut waktu slot pertama (seperti GAS)
   tugasan.sort((a, b) => a.awal - b.awal);
 
+  // ── Susun slot: PRIORITY_CLASS dahulu (PASS 0), kemudian kelas biasa (PASS 1) ──
+  //  Stable partition (Array.sort di Node adalah stabil): tanpa kelas keutamaan,
+  //  urutan kekal SAMA seperti asal (logik & golden tests sedia ada tidak terjejas).
+  const slotTasksTersusun = [];
+  for (const t of tugasan) {
+    for (const slot of t.slots) {
+      slotTasksTersusun.push({ guruNama: t.guruNama, slot, prio: kelasUtamaPadaSlot(slot.kelas, slot.mula, slot.tamat) ? 0 : 1 });
+    }
+  }
+  slotTasksTersusun.sort((a, b) => a.prio - b.prio);
+
   // ── PASS 1 ────────────────────────────────────────────
   const semuaHasilCadangan = [];
   const diproses = new Set();
 
-  for (const t of tugasan) {
-    for (const slot of t.slots) {
-      const slotKey = `${norm(t.guruNama)}||${slot.kelas}||${slot.masa}`;
-      if (diproses.has(slotKey)) continue;
-      if (disahkanSlotKeys.has(slotKey)) {
-        diproses.add(slotKey);
-        continue; // slot sudah DISAHKAN — kekal, jangan jana semula
-      }
-      const masaMula = slot.mula;
-      const masaTamat = slot.tamat;
-      if (masaMula === null) continue;
-
-      const calon = cariBestCalon({
-        semuaGuruHari,
-        hari: hUpper,
-        masaMula,
-        masaTamat,
-        semuaAbsenSet,
-        semuaAbsenMap,
-        mapKategori,
-        jadualData,
-        gantiGlobal,
-        cacheSlotFree,
-        cacheSlotMengajar,
-        hadSlotOverride: 1,
-        pengecualianList,
-        config,
-      });
-      const pilihan = calon[0] || null;
-
-      semuaHasilCadangan.push({
-        guruTakHadir: t.guruNama,
-        tarikh: tarikhDate,
-        kelas: slot.kelas,
-        masa: slot.masa,
-        hari: hUpper,
-        guruGanti: pilihan ? pilihan.nama : null,
-        kategori: pilihan ? pilihan.kategori : null,
-        status: 'CADANGAN',
-        isTier2: pilihan ? !!pilihan.isTier2 : false,
-        auditNote: pilihan ? (pilihan.isTier2 ? 'Relief kedua (2x)' : null) : 'Tiada calon sesuai',
-        subjek: slot.subjek || null,
-        _mula: masaMula,
-      });
-
+  for (const task of slotTasksTersusun) {
+    const guruNama = task.guruNama;
+    const slot = task.slot;
+    const slotKey = `${norm(guruNama)}||${slot.kelas}||${slot.masa}`;
+    if (diproses.has(slotKey)) continue;
+    if (disahkanSlotKeys.has(slotKey)) {
       diproses.add(slotKey);
-      if (pilihan) {
-        const k = norm(pilihan.nama);
-        (gantiGlobal[k] = gantiGlobal[k] || []).push({ kelas: slot.kelas, masa: slot.masa });
-      }
+      continue; // slot sudah DISAHKAN — kekal, jangan jana semula
+    }
+    const masaMula = slot.mula;
+    const masaTamat = slot.tamat;
+    if (masaMula === null) continue;
+
+    const calon = cariBestCalon({
+      semuaGuruHari,
+      hari: hUpper,
+      masaMula,
+      masaTamat,
+      semuaAbsenSet,
+      semuaAbsenMap,
+      mapKategori,
+      jadualData,
+      gantiGlobal,
+      cacheSlotFree,
+      cacheSlotMengajar,
+      hadSlotOverride: 1,
+      pengecualianList,
+      guruKecualiList,
+      config,
+    });
+    const pilihan = calon[0] || null;
+
+    semuaHasilCadangan.push({
+      guruTakHadir: guruNama,
+      tarikh: tarikhDate,
+      kelas: slot.kelas,
+      masa: slot.masa,
+      hari: hUpper,
+      guruGanti: pilihan ? pilihan.nama : null,
+      kategori: pilihan ? pilihan.kategori : null,
+      status: 'CADANGAN',
+      isTier2: pilihan ? !!pilihan.isTier2 : false,
+      auditNote: pilihan ? (pilihan.isTier2 ? 'Relief kedua (2x)' : null) : 'Tiada calon sesuai',
+      subjek: slot.subjek || null,
+      _mula: masaMula,
+    });
+
+    diproses.add(slotKey);
+    if (pilihan) {
+      const k = norm(pilihan.nama);
+      (gantiGlobal[k] = gantiGlobal[k] || []).push({ kelas: slot.kelas, masa: slot.masa });
     }
   }
 
@@ -241,6 +286,7 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
         cacheSlotMengajar,
         hadSlotOverride: null, // benarkan Tier 2
         pengecualianList,
+        guruKecualiList,
         config,
       });
       const pP2 = calonP2[0] || null;

@@ -96,6 +96,7 @@ export function cariBestCalon({
   cacheSlotMengajar,
   hadSlotOverride, // null = PASS 2 (benarkan Tier 2)
   pengecualianList = [],
+  guruKecualiList = [],
   config,
 }) {
   const calon = []; // Tier 1
@@ -143,6 +144,19 @@ export function cariBestCalon({
         }
       }
       if (dikecualikan) continue;
+    }
+
+    // 2b) Tetapan Khas Jadual — TEACHER_EXCLUSION (FULL_DAY atau TIME_RANGE)
+    if (guruKecualiList && guruKecualiList.length) {
+      let blok = false;
+      for (const g of guruKecualiList) {
+        if (g.n !== n) continue;
+        if (g.full || masaBertindih(masaMula, masaTamat, g.mula, g.tamat)) {
+          blok = true;
+          break;
+        }
+      }
+      if (blok) continue;
     }
 
     // 3) Kategori & nama exempt
