@@ -149,20 +149,9 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
       (cacheSlotMengajar[g][r.hari] || 0) + (!isFreeKelas(r.kelas) && r.kelas ? 1 : 0);
   }
 
-  // ── Kekalkan baris DISAHKAN (keputusan #4) ──
-  // Seed gantiGlobal dgn relief disahkan + tandai slot yang TIDAK perlu dijana semula.
+  // Jana SEPENUHNYA baharu berdasarkan rekod AKTIF semasa.
+  // (Tiada konsep "kekalkan DISAHKAN" — baris lama telah dibuang oleh simpanReliefBatch.)
   const gantiGlobal = {};
-  const disahkanSlotKeys = new Set();
-  if (existingBatch) {
-    for (const a of existingBatch.assignments) {
-      if (a.status !== 'DISAHKAN') continue;
-      disahkanSlotKeys.add(`${norm(a.guruTakHadir)}||${a.kelas}||${a.masa}`);
-      if (a.guruGanti) {
-        const k = norm(a.guruGanti);
-        (gantiGlobal[k] = gantiGlobal[k] || []).push({ kelas: a.kelas, masa: a.masa });
-      }
-    }
-  }
 
   // ── Senarai guru tak hadir yang perlu ganti (layan sebagai SEMUA) ──
   const guruPerluGanti = absentAll.filter((a) => a.perluGanti === true);
@@ -215,10 +204,6 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
     const slot = task.slot;
     const slotKey = `${norm(guruNama)}||${slot.kelas}||${slot.masa}`;
     if (diproses.has(slotKey)) continue;
-    if (disahkanSlotKeys.has(slotKey)) {
-      diproses.add(slotKey);
-      continue; // slot sudah DISAHKAN — kekal, jangan jana semula
-    }
     const masaMula = slot.mula;
     const masaTamat = slot.tamat;
     if (masaMula === null) continue;
@@ -320,4 +305,143 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
     adaAbsen: absentAll.length > 0,
     adaPerluGanti: guruPerluGanti.length > 0,
   };
+}
+
+// ════════════════════════════════════════════════════════════
+//  senaraiCalonSemua(tarikhDate) — untuk dropdown "tukar guru ganti".
+//  Bina konteks SAMA seperti janaJadualGanti, kemudian pulangkan SEMUA
+//  calon sah (Tier 1, atau Tier 2 jika tiada Tier 1) bagi setiap
+//  assignment BUKAN-BATAL dalam batch tarikh ini.
+//  TIDAK menyentuh janaJadualGanti / cariBestCalon (enjin kekal terkunci).
+//  Pulangan: { [assignmentId]: [{ nama, reason, reliefCountToday }] }
+// ════════════════════════════════════════════════════════════
+export async function senaraiCalonSemua(tarikhDate) {
+  if (!tarikhDate) return {};
+  const hUpper = hariDari(tarikhDate).toUpperCase();
+
+  const [jadualRows, absentAll, teachers, exclusions, config, batch, specialSettings] = await Promise.all([
+    prisma.teacherSchedule.findMany({ where: { hari: hUpper } }),
+    prisma.absenceRecord.findMany({ where: { tarikh: tarikhDate, statusBorang: 'AKTIF', deletedAt: null } }),
+    prisma.teacher.findMany(),
+    prisma.reliefExclusion.findMany({ where: { tarikh: tarikhDate } }),
+    loadReliefConfig(),
+    prisma.reliefBatch.findUnique({ where: { tarikh: tarikhDate }, include: { assignments: true } }),
+    prisma.dailySpecialSetting.findMany({ where: { tarikh: tarikhDate } }),
+  ]);
+  if (!batch) return {};
+
+  const jadualData = jadualRows.map((r) => ({
+    hari: String(r.hari).trim().toUpperCase(),
+    guru: norm(r.guru),
+    kelas: String(r.kelas || '').trim(),
+    masa: String(r.masa || '').trim(),
+    subjek: r.subjek ? String(r.subjek).trim() : '',
+  }));
+
+  // TEACHER_EXCLUSION (peka scope) — satu-satunya tetapan khas yang menapis CALON.
+  // (CLASS_EXCLUSION & PRIORITY_CLASS menapis/menyusun SLOT semasa jana, bukan calon.)
+  const HUJUNG = 1440;
+  const guruKecualiList = [];
+  for (const s of specialSettings) {
+    if (s.jenis !== 'TEACHER_EXCLUSION') continue;
+    if (s.scope === 'TIME_RANGE') {
+      const mula = masaKeMinitAuto(s.masaMula);
+      const tamat = s.masaTamat ? masaKeMinitAuto(s.masaTamat) : HUJUNG;
+      guruKecualiList.push({ n: norm(s.target), full: false, mula: mula ?? 0, tamat: tamat ?? HUJUNG });
+    } else {
+      guruKecualiList.push({ n: norm(s.target), full: true, mula: 0, tamat: HUJUNG });
+    }
+  }
+
+  const semuaGuruHari = [...new Set(jadualData.map((r) => r.guru))].filter(Boolean);
+  const mapKategori = {};
+  for (const t of teachers) mapKategori[norm(t.nama)] = norm(t.kategori);
+
+  const semuaAbsenSet = new Set();
+  const semuaAbsenMap = {};
+  for (const a of absentAll) {
+    const n = norm(a.guruNama);
+    semuaAbsenSet.add(n);
+    (semuaAbsenMap[n] = semuaAbsenMap[n] || []).push(julatTidakHadir(a.jenis, a.masaMula, a.masaTamat));
+  }
+  const pengecualianList = exclusions.map((p) => ({
+    nama: p.guruNama,
+    mod: String(p.mod).toUpperCase(),
+    masaDari: p.masaDari,
+    masaHingga: p.masaHingga,
+  }));
+
+  const cacheSlotFree = {};
+  const cacheSlotMengajar = {};
+  for (const r of jadualData) {
+    const g = r.guru;
+    if (!g) continue;
+    cacheSlotFree[g] = cacheSlotFree[g] || {};
+    cacheSlotMengajar[g] = cacheSlotMengajar[g] || {};
+    cacheSlotFree[g][r.hari] = (cacheSlotFree[g][r.hari] || 0) + (isFreeKelas(r.kelas) ? 1 : 0);
+    cacheSlotMengajar[g][r.hari] = (cacheSlotMengajar[g][r.hari] || 0) + (!isFreeKelas(r.kelas) && r.kelas ? 1 : 0);
+  }
+
+  // Beban relief sedia ada (semua assignment bukan-BATAL) → {nama,kelas,masa,fromId}
+  // "TIADA_PENGGANTI" bukan guru sebenar — jangan kira sebagai beban.
+  const bebanFlat = [];
+  for (const a of batch.assignments) {
+    if (a.status === 'BATAL' || !a.guruGanti || a.guruGanti === 'TIADA_PENGGANTI') continue;
+    bebanFlat.push({ nama: norm(a.guruGanti), kelas: a.kelas, masa: a.masa, fromId: a.id });
+  }
+
+  const hasil = {};
+  for (const a of batch.assignments) {
+    if (a.status === 'BATAL') {
+      hasil[a.id] = [];
+      continue;
+    }
+    const [mula, tamat] = parseMasa(a.masa);
+    if (mula === null) {
+      hasil[a.id] = [];
+      continue;
+    }
+
+    // gantiGlobal = beban SEMUA kecuali assignment ini sendiri
+    const gantiGlobal = {};
+    for (const x of bebanFlat) {
+      if (x.fromId === a.id) continue;
+      (gantiGlobal[x.nama] = gantiGlobal[x.nama] || []).push({ kelas: x.kelas, masa: x.masa });
+    }
+
+    const arr = cariBestCalon({
+      semuaGuruHari,
+      hari: hUpper,
+      masaMula: mula,
+      masaTamat: tamat,
+      semuaAbsenSet,
+      semuaAbsenMap,
+      mapKategori,
+      jadualData,
+      gantiGlobal,
+      cacheSlotFree,
+      cacheSlotMengajar,
+      hadSlotOverride: null, // senarai seluas mungkin (Tier 1, atau Tier 2 jika perlu)
+      pengecualianList,
+      guruKecualiList,
+      config,
+    });
+
+    const calon = arr.map((c) => ({
+      nama: c.nama,
+      reason: c.isTier2 ? 'Relief kedua' : c.slotFree > 0 ? 'Free slot' : 'Layak',
+      reliefCountToday: gantiGlobal[norm(c.nama)]?.length || 0,
+    }));
+
+    // Pastikan pilihan semasa sentiasa wujud (di atas senarai)
+    if (a.guruGanti && !calon.some((c) => c.nama === a.guruGanti)) {
+      calon.unshift({
+        nama: a.guruGanti,
+        reason: 'Pilihan semasa',
+        reliefCountToday: gantiGlobal[norm(a.guruGanti)]?.length || 0,
+      });
+    }
+    hasil[a.id] = calon;
+  }
+  return hasil;
 }

@@ -7,7 +7,7 @@
 import { z } from 'zod';
 import prisma from '../lib/prisma.js';
 import { writeAudit, getClientIp } from '../lib/audit.js';
-import { janaJadualGanti } from '../services/relief.service.js';
+import { janaJadualGanti, senaraiCalonSemua } from '../services/relief.service.js';
 import { simpanReliefBatch } from '../services/assignment.service.js';
 import { parseMasa } from '../lib/timeUtil.js';
 
@@ -44,8 +44,17 @@ export async function generateRelief(req, res) {
   try {
     const hasilJana = await janaJadualGanti({ tarikh });
 
-    // Tiada guru perlu ganti — tidak cipta batch
+    // Tiada guru perlu ganti — buang sebarang batch lama tarikh ini supaya
+    // assignment lama TIDAK kekal selepas semua rekod ketidakhadiran dibatalkan.
     if (!hasilJana.adaPerluGanti) {
+      await prisma.reliefBatch.deleteMany({ where: { tarikh: hasilJana.tarikhDate } });
+      await writeAudit({
+        userId: req.user?.id || null,
+        action: 'RELIEF_CLEAR_EMPTY',
+        entity: `relief:${tarikh}`,
+        detail: { tarikh, sebab: hasilJana.adaAbsen ? 'tiada perlu ganti' : 'tiada ketidakhadiran' },
+        ip: getClientIp(req),
+      });
       return res.json({
         tarikh,
         hari: hasilJana.hari,
@@ -119,6 +128,17 @@ export async function getReliefByTarikh(req, res) {
       return res.status(404).json({ mesej: 'Tiada batch relief untuk tarikh ini.', tarikh: req.params.tarikh });
     }
 
+    // Calon guru ganti untuk dropdown (tidak dikira jika batch terkunci)
+    let candById = {};
+    if (!['DIHANTAR', 'SELESAI'].includes(batch.status)) {
+      try {
+        candById = await senaraiCalonSemua(tarikhDate);
+      } catch (e) {
+        console.error('senaraiCalonSemua ERROR:', e);
+        candById = {};
+      }
+    }
+
     const assignments = susunIkutMasa(batch.assignments).map((a) => ({
       id: a.id,
       guruTakHadir: a.guruTakHadir,
@@ -131,6 +151,7 @@ export async function getReliefByTarikh(req, res) {
       status: a.status,
       isTier2: a.isTier2,
       auditNote: a.auditNote,
+      candidates: candById[a.id] || [],
     }));
 
     const terisi = assignments.filter((a) => a.guruGanti).length;
@@ -153,5 +174,38 @@ export async function getReliefByTarikh(req, res) {
   } catch (err) {
     console.error('getReliefByTarikh ERROR:', err);
     res.status(500).json({ mesej: 'Ralat membaca batch relief', error: err.message });
+  }
+}
+
+// ── PATCH /api/relief/:tarikh/confirm-all ─────────────────
+// Sahkan SEMUA baris CADANGAN → DISAHKAN. DISAHKAN & BATAL tidak disentuh.
+export async function confirmAllByTarikh(req, res) {
+  const tarikhDate = parseTarikhParam(req.params.tarikh);
+  if (!tarikhDate) return res.status(400).json({ mesej: 'Tarikh perlu format YYYY-MM-DD' });
+
+  try {
+    const batch = await prisma.reliefBatch.findUnique({ where: { tarikh: tarikhDate } });
+    if (!batch) return res.status(404).json({ mesej: 'Tiada batch relief untuk tarikh ini.' });
+    if (['DIHANTAR', 'SELESAI'].includes(batch.status)) {
+      return res.status(409).json({ mesej: `Batch sudah ${batch.status} — tidak boleh disahkan.`, statusBatch: batch.status });
+    }
+
+    const r = await prisma.reliefAssignment.updateMany({
+      where: { batchId: batch.id, status: 'CADANGAN' },
+      data: { status: 'DISAHKAN', updatedBy: req.user?.username || null },
+    });
+
+    await writeAudit({
+      userId: req.user?.id || null,
+      action: 'RELIEF_CONFIRM_ALL',
+      entity: `relief_batch:${batch.id}`,
+      detail: { tarikh: req.params.tarikh, disahkan: r.count },
+      ip: getClientIp(req),
+    });
+
+    res.json({ success: true, disahkan: r.count });
+  } catch (err) {
+    console.error('confirmAllByTarikh ERROR:', err);
+    res.status(500).json({ mesej: 'Ralat mengesahkan semua cadangan', error: err.message });
   }
 }

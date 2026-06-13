@@ -1,12 +1,13 @@
 // ════════════════════════════════════════════════════════════
 //  assignment.service.js — simpan hasil jana ke pangkalan data.
 //
-//  Strategi (keputusan #4):
+//  Strategi:
 //    • Satu relief_batches setiap tarikh (status → DIJANA).
-//    • Baris status DISAHKAN DIKEKALKAN (tidak disentuh).
-//    • Baris status CADANGAN sedia ada DIBUANG, kemudian ditulis semula.
-//    • Baris BATAL dibiarkan (tiada aliran batal di Fasa 6).
-//    • Jika batch sudah DIHANTAR/SELESAI → tolak (disemak juga di sini).
+//    • Jana Semula GANTI PENUH: SEMUA baris lama tarikh itu dibuang, kemudian
+//      ditulis semula daripada rekod ketidakhadiran AKTIF semasa.
+//    • Tiada konsep DISAHKAN/lock — jadual relief ialah draf/cadangan.
+//    • Jika batch sudah DIHANTAR/SELESAI → tolak (pengaman; tidak berlaku
+//      dalam aliran semasa).
 //  Semua dalam satu transaksi untuk integriti.
 // ════════════════════════════════════════════════════════════
 
@@ -34,9 +35,11 @@ export async function simpanReliefBatch({ tarikhDate, hari, hasil, generatedBy =
       });
     }
 
-    // Buang hanya baris CADANGAN (kekalkan DISAHKAN & BATAL)
+    // Jana Semula = GANTI PENUH: buang SEMUA baris lama batch ini, kemudian
+    // tulis semula berdasarkan rekod ketidakhadiran AKTIF semasa sahaja.
+    // (Tiada lagi konsep "kekalkan DISAHKAN" — jadual dianggap draf/cadangan.)
     const dibuang = await tx.reliefAssignment.deleteMany({
-      where: { batchId: batch.id, status: 'CADANGAN' },
+      where: { batchId: batch.id },
     });
 
     // Tulis semula baris CADANGAN baharu
