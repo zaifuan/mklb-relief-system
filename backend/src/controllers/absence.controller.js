@@ -14,6 +14,7 @@ import {
   JENIS_LABEL,
 } from '../lib/absenceConstants.js';
 import { hariDari, generateReference } from '../lib/absenceUtil.js';
+import { masaKeMinitAuto } from '../lib/absenceWindow.js';
 import { sendRealtime } from '../services/telegramNotify.service.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -27,14 +28,28 @@ const createSchema = z
     sebab: z.enum(SEBAB, { errorMap: () => ({ message: 'Sebab tidak sah' }) }),
     jenis: z.enum(JENIS, { errorMap: () => ({ message: 'Jenis tidak sah' }) }),
     masaMula: z.string().optional(),
+    masaTamat: z.string().optional(),
     catatan: z.string().optional(),
   })
   .superRefine((val, ctx) => {
     if (!val.tarikhMula && !val.tarikh) {
       ctx.addIssue({ path: ['tarikhMula'], code: 'custom', message: 'Tarikh diperlukan' });
     }
-    if (val.jenis === 'SEPARUH_HARI' && !val.masaMula?.trim()) {
-      ctx.addIssue({ path: ['masaMula'], code: 'custom', message: 'Masa mula diperlukan untuk separuh hari' });
+    if (val.jenis === 'SEPARUH_HARI') {
+      if (!val.masaMula?.trim()) {
+        ctx.addIssue({ path: ['masaMula'], code: 'custom', message: 'Masa mula diperlukan untuk separuh hari' });
+      } else if (masaKeMinitAuto(val.masaMula) === null) {
+        ctx.addIssue({ path: ['masaMula'], code: 'custom', message: 'Masa mula tidak sah' });
+      }
+      if (val.masaTamat?.trim()) {
+        const m = masaKeMinitAuto(val.masaMula);
+        const t = masaKeMinitAuto(val.masaTamat);
+        if (t === null) {
+          ctx.addIssue({ path: ['masaTamat'], code: 'custom', message: 'Masa tamat tidak sah' });
+        } else if (m !== null && t <= m) {
+          ctx.addIssue({ path: ['masaTamat'], code: 'custom', message: 'Masa tamat mesti selepas masa mula' });
+        }
+      }
     }
     if (SEBAB_PERLU_DETAIL.includes(val.sebab) && !val.catatan?.trim()) {
       ctx.addIssue({ path: ['catatan'], code: 'custom', message: 'Catatan diperlukan untuk sebab ini' });
@@ -74,7 +89,7 @@ export async function createAbsence(req, res) {
   }
 
   try {
-    const { guruNama, sebab, jenis, masaMula, catatan } = parsed.data;
+    const { guruNama, sebab, jenis, masaMula, masaTamat, catatan } = parsed.data;
     const mulaStr = parsed.data.tarikhMula || parsed.data.tarikh;
     const tamatStr = parsed.data.tarikhTamat || mulaStr;
 
@@ -135,6 +150,7 @@ export async function createAbsence(req, res) {
                 sebabDetail: catatan?.trim() || null,
                 jenis,
                 masaMula: jenis === 'SEPARUH_HARI' ? masaMula.trim() : null,
+                masaTamat: jenis === 'SEPARUH_HARI' ? masaTamat?.trim() || null : null,
                 statusBorang: 'AKTIF',
                 submittedBy: guru.nama,
                 reference,

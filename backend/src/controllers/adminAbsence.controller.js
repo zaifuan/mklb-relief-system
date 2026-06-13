@@ -72,6 +72,7 @@ export async function listAbsence(req, res) {
         sebabDetail: true,
         jenis: true,
         masaMula: true,
+        masaTamat: true,
         statusBorang: true,
         createdAt: true,
       },

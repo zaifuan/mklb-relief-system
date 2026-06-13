@@ -14,6 +14,33 @@ function fmtRange(mula, tamat) {
   if (!tamat || tamat === mula) return fmtTarikh(mula);
   return `${fmtTarikh(mula)} – ${fmtTarikh(tamat)}`;
 }
+// Senarai masa formal selang 30 minit (07:00 pagi → 06:00 petang).
+// Simpan nilai 24-jam "HH:MM"; papar "HH:MM pagi/tengah hari/petang".
+function labelMasa24(value) {
+  const [h, m] = String(value).split(':').map(Number);
+  const suffix = h < 12 ? 'pagi' : h === 12 ? 'tengah hari' : 'petang';
+  let h12 = h % 12;
+  if (h12 === 0) h12 = 12;
+  return `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${suffix}`;
+}
+const MASA_OPTIONS = (() => {
+  const out = [];
+  for (let minit = 7 * 60; minit <= 18 * 60; minit += 30) {
+    const h = Math.floor(minit / 60);
+    const m = minit % 60;
+    const value = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    out.push({ value, label: labelMasa24(value), minit });
+  }
+  return out;
+})();
+function minitMasa24(value) {
+  return MASA_OPTIONS.find((s) => s.value === value)?.minit ?? null;
+}
+function fmtMasaRange(masaMula, masaTamat) {
+  if (!masaMula) return '';
+  const tamat = masaTamat ? labelMasa24(masaTamat) : 'Tamat sekolah';
+  return `${labelMasa24(masaMula)} – ${tamat}`;
+}
 function todayStr() {
   try {
     return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur' }).format(new Date());
@@ -34,6 +61,7 @@ export default function Page() {
     sebab: '',
     jenis: 'SEPANJANG_HARI',
     masaMula: '',
+    masaTamat: '',
     catatan: '',
   });
   const [submitting, setSubmitting] = useState(false);
@@ -45,6 +73,12 @@ export default function Page() {
   const [tmpMula, setTmpMula] = useState('');
   const [tmpTamat, setTmpTamat] = useState('');
   const [modalErr, setModalErr] = useState('');
+
+  // Modal masa (separuh hari)
+  const [masaModal, setMasaModal] = useState(false);
+  const [tmpMasaMula, setTmpMasaMula] = useState('');
+  const [tmpMasaTamat, setTmpMasaTamat] = useState('');
+  const [masaErr, setMasaErr] = useState('');
 
   useEffect(() => {
     api
@@ -87,11 +121,43 @@ export default function Page() {
     setModalErr('');
   }
 
+  // Minit slot dari opts (untuk susunan/validasi tamat > mula)
+  function minitMasa(v) {
+    return minitMasa24(v);
+  }
+  function openMasaModal() {
+    setTmpMasaMula(form.masaMula || '');
+    setTmpMasaTamat(form.masaTamat || '');
+    setMasaErr('');
+    setMasaModal(true);
+  }
+  function closeMasaModal() {
+    setMasaModal(false);
+    setMasaErr('');
+  }
+  function confirmMasa() {
+    if (!tmpMasaMula) {
+      setMasaErr('Sila pilih masa mula.');
+      return;
+    }
+    if (tmpMasaTamat) {
+      const sm = minitMasa(tmpMasaMula);
+      const st = minitMasa(tmpMasaTamat);
+      if (sm != null && st != null && st <= sm) {
+        setMasaErr('Masa tamat mesti selepas masa mula.');
+        return;
+      }
+    }
+    setForm((f) => ({ ...f, masaMula: tmpMasaMula, masaTamat: tmpMasaTamat }));
+    setMasaModal(false);
+    setMasaErr('');
+  }
+
   function validate() {
     if (!form.guruNama) return 'Sila pilih nama guru.';
     if (!form.tarikhMula) return 'Sila pilih tarikh.';
     if (!form.sebab) return 'Sila pilih sebab ketidakhadiran.';
-    if (separuh && !form.masaMula.trim()) return 'Sila isi masa mula untuk separuh hari.';
+    if (separuh && !form.masaMula) return 'Sila pilih masa tidak hadir.';
     if (perluDetail && !form.catatan.trim()) return 'Catatan diperlukan untuk sebab yang dipilih.';
     return '';
   }
@@ -113,7 +179,8 @@ export default function Page() {
         tarikhTamat: form.tarikhTamat || form.tarikhMula,
         sebab: form.sebab,
         jenis: form.jenis,
-        masaMula: separuh ? form.masaMula.trim() : undefined,
+        masaMula: separuh ? form.masaMula : undefined,
+        masaTamat: separuh ? form.masaTamat || undefined : undefined,
         catatan: form.catatan.trim() || undefined,
       };
       const res = await api.submit(payload);
@@ -125,7 +192,7 @@ export default function Page() {
   }
 
   function resetForm() {
-    setForm({ guruNama: '', tarikhMula: '', tarikhTamat: '', sebab: '', jenis: 'SEPANJANG_HARI', masaMula: '', catatan: '' });
+    setForm({ guruNama: '', tarikhMula: '', tarikhTamat: '', sebab: '', jenis: 'SEPANJANG_HARI', masaMula: '', masaTamat: '', catatan: '' });
     setResult(null);
     setError('');
     setSubmitting(false);
@@ -242,18 +309,22 @@ export default function Page() {
               ))}
             </div>
 
-            {/* Masa mula (jika separuh hari) */}
+            {/* Masa tidak hadir (jika separuh hari) — pemilih, bukan taip bebas */}
             {separuh && (
               <>
-                <label className="lbl" htmlFor="masa">Masa mula tidak hadir</label>
-                <input
-                  id="masa"
-                  type="text"
-                  className="inp"
-                  placeholder="cth: Slot 3 atau 10:00"
-                  value={form.masaMula}
-                  onChange={(e) => set('masaMula', e.target.value)}
-                />
+                <label className="lbl" htmlFor="masaBtn">Masa tidak hadir</label>
+                <button
+                  type="button"
+                  id="masaBtn"
+                  className={`inp dateField${form.masaMula ? '' : ' ph'}`}
+                  onClick={openMasaModal}
+                >
+                  <span>{form.masaMula ? fmtMasaRange(form.masaMula, form.masaTamat) : 'Pilih masa'}</span>
+                  <svg className="cal" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.6" />
+                    <path d="M12 7.5V12l3 2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
               </>
             )}
 
@@ -322,6 +393,54 @@ export default function Page() {
             <div className="mActions">
               <button type="button" className="btn ghost mBtn" onClick={closeDateModal}>Batal</button>
               <button type="button" className="btn mBtn" onClick={confirmDate}>Sahkan</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {masaModal && (
+        <div className="overlay" onClick={closeMasaModal}>
+          <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <div className="mHead">
+              <span className="mTitle">Masa tidak hadir</span>
+              <button type="button" className="x" onClick={closeMasaModal} aria-label="Tutup">×</button>
+            </div>
+
+            <label className="lbl" htmlFor="msMula">Masa mula tidak hadir</label>
+            <select
+              id="msMula"
+              className="inp"
+              value={tmpMasaMula}
+              onChange={(e) => {
+                const v = e.target.value;
+                setTmpMasaMula(v);
+                const sm = minitMasa(v);
+                const st = minitMasa(tmpMasaTamat);
+                if (v && tmpMasaTamat && sm != null && st != null && st <= sm) setTmpMasaTamat('');
+              }}
+            >
+              <option value="">Pilih masa</option>
+              {MASA_OPTIONS.map((s) => (
+                <option key={s.value} value={s.value}>{s.label}</option>
+              ))}
+            </select>
+
+            <label className="lbl" htmlFor="msTamat">Masa tamat tidak hadir</label>
+            <select id="msTamat" className="inp" value={tmpMasaTamat} onChange={(e) => setTmpMasaTamat(e.target.value)}>
+              <option value="">Tamat sekolah</option>
+              {MASA_OPTIONS.filter((s) => {
+                const sm = minitMasa(tmpMasaMula);
+                return sm == null || s.minit > sm;
+              }).map((s) => (
+                <option key={s.value} value={s.value}>{s.label}</option>
+              ))}
+            </select>
+            <p className="hint">Biar “Tamat sekolah” jika tidak hadir hingga waktu akhir persekolahan.</p>
+            {masaErr && <p className="hint err">{masaErr}</p>}
+
+            <div className="mActions">
+              <button type="button" className="btn ghost mBtn" onClick={closeMasaModal}>Batal</button>
+              <button type="button" className="btn mBtn" onClick={confirmMasa}>Sahkan</button>
             </div>
           </div>
         </div>

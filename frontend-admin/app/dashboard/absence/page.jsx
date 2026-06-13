@@ -270,7 +270,7 @@ export default function AbsenceDashboard() {
                     <td>{r.guruNama}</td>
                     <td>{sebabLabel(r.sebabKategori)}</td>
                     <td>{jenisLabel(r.jenis)}</td>
-                    <td>{r.masaMula || '-'}</td>
+                    <td>{r.masaMula ? `${r.masaMula} – ${r.masaTamat || 'tamat'}` : '-'}</td>
                     <td><span className={`badge ${r.statusBorang.toLowerCase()}`}>{STATUS_LABEL[r.statusBorang]}</span></td>
                     <td>{fmtDateTime(r.createdAt)}</td>
                     <td><button className="link" onClick={() => openDetail(r.id)}>Urus</button></td>
@@ -295,7 +295,7 @@ export default function AbsenceDashboard() {
               <div><dt>Nama guru</dt><dd>{selected.guruNama}</dd></div>
               <div><dt>Tarikh</dt><dd>{fmtDate(selected.tarikh)} ({selected.hari})</dd></div>
               <div><dt>Sebab</dt><dd>{sebabLabel(selected.sebabKategori)}</dd></div>
-              <div><dt>Jenis</dt><dd>{jenisLabel(selected.jenis)}{selected.masaMula ? ` — ${selected.masaMula}` : ''}</dd></div>
+              <div><dt>Jenis</dt><dd>{jenisLabel(selected.jenis)}{selected.masaMula ? ` — ${selected.masaMula} hingga ${selected.masaTamat || 'tamat sekolah'}` : ''}</dd></div>
               <div><dt>Catatan</dt><dd>{selected.sebabDetail || '—'}</dd></div>
               <div><dt>Status</dt><dd><span className={`badge ${selected.statusBorang.toLowerCase()}`}>{STATUS_LABEL[selected.statusBorang]}</span></dd></div>
               <div><dt>Tarikh hantar</dt><dd>{fmtDateTime(selected.createdAt)}</dd></div>

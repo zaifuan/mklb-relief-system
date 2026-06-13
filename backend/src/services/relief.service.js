@@ -19,7 +19,8 @@ import prisma from '../lib/prisma.js';
 import { hariDari } from '../lib/absenceUtil.js';
 import { loadReliefConfig } from '../lib/reliefConfig.js';
 import { cariBestCalon } from './candidate.service.js';
-import { masaKeMinit, parseMasa } from '../lib/timeUtil.js';
+import { parseMasa } from '../lib/timeUtil.js';
+import { julatTidakHadir, slotDalamJulat } from '../lib/absenceWindow.js';
 
 const norm = (s) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
 const isFreeKelas = (k) => String(k || '').trim().toUpperCase() === 'FREE';
@@ -84,13 +85,15 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
   const mapKategori = {};
   for (const t of teachers) mapKategori[norm(t.nama)] = norm(t.kategori);
 
-  // Set/Map semua guru absen (peka masa — sepanjang hari) untuk semak calon
+  // Set/Map guru absen PEKA MASA untuk semak calon.
+  //   SEPARUH_HARI → dikecualikan sebagai calon HANYA dalam julat tidak hadir;
+  //   di luar julat, guru itu boleh dipilih sebagai guru ganti seperti biasa.
   const semuaAbsenSet = new Set();
   const semuaAbsenMap = {};
   for (const a of absentAll) {
     const n = norm(a.guruNama);
     semuaAbsenSet.add(n);
-    semuaAbsenMap[n] = [{ masaMula: 0, masaTamat: 1440 }];
+    (semuaAbsenMap[n] = semuaAbsenMap[n] || []).push(julatTidakHadir(a.jenis, a.masaMula, a.masaTamat));
   }
 
   // Senarai pengecualian relief (harian)
@@ -143,10 +146,12 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
       })
       .filter((s) => s.mula !== null);
 
-    // SEPARUH_HARI → hanya slot bermula >= masaMula
-    if (a.jenis === 'SEPARUH_HARI' && a.masaMula) {
-      const minMula = masaKeMinit(a.masaMula);
-      if (minMula !== null) slots = slots.filter((s) => s.mula >= minMula);
+    // SEPARUH_HARI → hanya slot yang BERTINDIH julat tidak hadir
+    //   [masaMula, masaTamat || hujung hari]. Slot di luar julat: guru hadir,
+    //   tidak perlu diganti (lihat absenceWindow.js).
+    if (a.jenis === 'SEPARUH_HARI') {
+      const julat = julatTidakHadir(a.jenis, a.masaMula, a.masaTamat);
+      slots = slots.filter((s) => slotDalamJulat(s.mula, s.tamat, julat));
     }
 
     slots.sort((x, y) => (x.mula || 0) - (y.mula || 0));
