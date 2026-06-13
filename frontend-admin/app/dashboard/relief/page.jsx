@@ -91,6 +91,7 @@ export default function ReliefDashboard() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [rowBusy, setRowBusy] = useState(0);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
@@ -287,6 +288,27 @@ export default function ReliefDashboard() {
       await load(tarikh); // selaras semula jika gagal
     } finally {
       setRowBusy(0);
+    }
+  }
+
+  async function janaPdf() {
+    if (pdfBusy || !data || rowsSorted.length === 0) return;
+    setPdfBusy(true);
+    setError('');
+    try {
+      const blob = await api.relief.pdf(tarikh);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `jadual-ganti-${tarikh}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (e) {
+      setError(e.message || 'Gagal menjana PDF');
+    } finally {
+      setPdfBusy(false);
     }
   }
 
@@ -518,8 +540,8 @@ export default function ReliefDashboard() {
 
             {/* Bar tindakan utama */}
             <div className="actionsBar">
-              <button className="btn ghost pdf" disabled title="Akan datang">
-                Jana PDF <span className="soon">Akan datang</span>
+              <button className="btn pdf" onClick={janaPdf} disabled={pdfBusy || rowsSorted.length === 0}>
+                {pdfBusy ? 'Menjana PDF…' : 'Jana PDF'}
               </button>
             </div>
           </>
@@ -644,8 +666,7 @@ export default function ReliefDashboard() {
         .actionsBar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 4px 0 16px; }
         .btn.big { padding: 12px 20px; font-size: 15px; border-radius: 11px; }
         .btn:disabled { opacity: .55; cursor: not-allowed; }
-        .btn.pdf { display: inline-flex; align-items: center; gap: 8px; }
-        .btn.pdf .soon { font-size: 11px; font-weight: 600; color: #8a6d12; background: #faf3df; border: 1px solid #ecdcae; border-radius: 999px; padding: 2px 8px; }
+        .btn.pdf { padding: 12px 22px; font-size: 15px; border-radius: 11px; }
 
         .gantiSel { width: 100%; cursor: pointer; }
         .gantiSel:focus-visible { border-color: #0f766e; box-shadow: 0 0 0 3px rgba(15,118,110,0.15); }

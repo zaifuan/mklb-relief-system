@@ -35,6 +35,29 @@ async function request(path, { method = 'GET', body, auth = true } = {}) {
   return data;
 }
 
+// Muat turun binari (cth: PDF) dengan auth. Pulang Blob.
+async function requestBlob(path, { auth = true } = {}) {
+  const headers = {};
+  if (auth) {
+    const token = getToken();
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+  }
+  const res = await fetch(`${BASE}${path}`, { method: 'GET', headers });
+  if (!res.ok) {
+    if (res.status === 401) clearToken();
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {
+      /* tiada JSON */
+    }
+    const err = new Error(data?.mesej || `Ralat ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return res.blob();
+}
+
 function qs(params = {}) {
   const sp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
@@ -86,6 +109,7 @@ export const api = {
     updateTeacher: (id, guruGanti) =>
       request(`/api/relief/assignment/${id}/teacher`, { method: 'PATCH', body: { guruGanti } }),
     confirmAll: (tarikh) => request(`/api/relief/${tarikh}/confirm-all`, { method: 'PATCH' }),
+    pdf: (tarikh) => requestBlob(`/api/relief/${tarikh}/pdf`),
   },
 
   // Telegram snapshot ketidakhadiran (Fasa 8)

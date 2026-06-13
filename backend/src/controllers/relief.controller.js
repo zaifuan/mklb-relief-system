@@ -10,6 +10,8 @@ import { writeAudit, getClientIp } from '../lib/audit.js';
 import { janaJadualGanti, senaraiCalonSemua } from '../services/relief.service.js';
 import { simpanReliefBatch } from '../services/assignment.service.js';
 import { parseMasa } from '../lib/timeUtil.js';
+import { hariDari } from '../lib/absenceUtil.js';
+import { streamReliefPdf } from '../services/pdf.service.js';
 
 const bodySchema = z.object({
   tarikh: z
@@ -207,5 +209,59 @@ export async function confirmAllByTarikh(req, res) {
   } catch (err) {
     console.error('confirmAllByTarikh ERROR:', err);
     res.status(500).json({ mesej: 'Ralat mengesahkan semua cadangan', error: err.message });
+  }
+}
+
+// Format masa "9.45-10.15" / "9.45 – 10.15" → "9.45 – 10.15"
+function fmtMasaJulat(masa) {
+  const clean = String(masa || '').replace(/[–—]/g, '-');
+  const i = clean.indexOf('-');
+  if (i < 0) return clean.trim();
+  return `${clean.slice(0, i).trim()} – ${clean.slice(i + 1).trim()}`;
+}
+
+// ── GET /api/relief/:tarikh/pdf ───────────────────────────
+// Jana PDF "JADUAL WAKTU GURU GANTI" (A4 Landscape) untuk batch tarikh ini.
+export async function reliefPdf(req, res) {
+  const tarikhDate = parseTarikhParam(req.params.tarikh);
+  if (!tarikhDate) return res.status(400).json({ mesej: 'Tarikh perlu format YYYY-MM-DD' });
+
+  try {
+    const batch = await prisma.reliefBatch.findUnique({
+      where: { tarikh: tarikhDate },
+      include: { assignments: true },
+    });
+    if (!batch) return res.status(404).json({ mesej: 'Tiada batch relief untuk tarikh ini.' });
+
+    const baris = susunIkutMasa(batch.assignments).map((a) => ({
+      guruTakHadir: a.guruTakHadir,
+      kelas: a.kelas,
+      subjek: a.subjek || '-',
+      masa: fmtMasaJulat(a.masa),
+      guruGanti: a.guruGanti,
+    }));
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="jadual-ganti-${req.params.tarikh}.pdf"`);
+
+    await writeAudit({
+      userId: req.user?.id || null,
+      action: 'RELIEF_PDF',
+      entity: `relief_batch:${batch.id}`,
+      detail: { tarikh: req.params.tarikh, slot: baris.length },
+      ip: getClientIp(req),
+    });
+
+    streamReliefPdf(res, {
+      tarikhDate,
+      hari: hariDari(tarikhDate).toUpperCase(),
+      namaSekolah: 'SABK MAAHAD AL KHAIR LIL BANAT',
+      baris,
+      dijanaOleh: batch.generatedBy,
+      masaJana: batch.generatedAt,
+    });
+  } catch (err) {
+    console.error('reliefPdf ERROR:', err);
+    if (!res.headersSent) res.status(500).json({ mesej: 'Ralat menjana PDF', error: err.message });
   }
 }
