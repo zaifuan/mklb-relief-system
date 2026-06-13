@@ -47,7 +47,7 @@ async function main() {
       },
     },
     {
-      nama: 'ADMIN_RELIEF',
+      nama: 'ADMIN',
       permissions: {
         manageUsers: false,
         manageSettings: false,
@@ -70,30 +70,29 @@ async function main() {
   console.log(`  ✓ ${roles.length} peranan`);
 
   const superRole = await prisma.role.findUnique({ where: { nama: 'SUPER_ADMIN' } });
-  const reliefRole = await prisma.role.findUnique({ where: { nama: 'ADMIN_RELIEF' } });
-  const hash = await bcrypt.hash(DEFAULT_PASSWORD, 10);
+  const adminRole = await prisma.role.findUnique({ where: { nama: 'ADMIN' } });
 
-  // ── 3) Akaun admin + hari bertugas (boleh diubah Super Admin) ──
-  const users = [
-    { nama: 'Ustaz Zai', username: 'zai', roleId: superRole.id, hari: 'JUMAAT' },
-    { nama: 'Cikgu Din', username: 'din', roleId: reliefRole.id, hari: 'ISNIN' },
-    { nama: 'Ustazah Najwa', username: 'najwa', roleId: reliefRole.id, hari: 'SELASA' },
-    { nama: 'Teacher Mariam', username: 'mariam', roleId: reliefRole.id, hari: 'RABU' },
-    { nama: 'Teacher Ainul', username: 'ainul', roleId: reliefRole.id, hari: 'KHAMIS' },
+  // ── 3) Akaun umum (tidak bergantung nama individu — AJK boleh bertukar setiap tahun) ──
+  const accounts = [
+    { username: 'ketuaadmin', password: 'zai5667', roleId: superRole.id, label: 'Super Admin' },
+    { username: 'adminjadual', password: 'aft6003', roleId: adminRole.id, label: 'Admin' },
   ];
-  for (const u of users) {
-    const user = await prisma.user.upsert({
-      where: { username: u.username },
-      update: { nama: u.nama, roleId: u.roleId },
-      create: { nama: u.nama, username: u.username, passwordHash: hash, roleId: u.roleId },
-    });
-    await prisma.adminAssignment.upsert({
-      where: { userId: user.id },
-      update: { hariBertugas: u.hari },
-      create: { userId: user.id, hariBertugas: u.hari },
+  const keepUsernames = accounts.map((a) => a.username);
+  for (const a of accounts) {
+    const hash = await bcrypt.hash(a.password, 10);
+    await prisma.user.upsert({
+      where: { username: a.username },
+      // Jangan tukar passwordHash sedia ada (kekal jika Super Admin telah mengubahnya)
+      update: { roleId: a.roleId, isActive: true },
+      create: { nama: a.label, username: a.username, passwordHash: hash, roleId: a.roleId, isActive: true },
     });
   }
-  console.log(`  ✓ ${users.length} akaun admin (kata laluan awal: "${DEFAULT_PASSWORD}" — sila tukar)`);
+  // Nyahaktif sebarang akaun lain (cth akaun individu lama) — tidak dipadam supaya audit kekal
+  const dimatikan = await prisma.user.updateMany({
+    where: { username: { notIn: keepUsernames } },
+    data: { isActive: false },
+  });
+  console.log(`  ✓ ${accounts.length} akaun umum (ketuaadmin / adminjadual); ${dimatikan.count} akaun lama dinyahaktifkan`);
 
   // ── 4) Sekatan khas (dari CONFIG.SEKATAN_KHAS — logik dikekalkan) ──
   const restrictions = [

@@ -43,7 +43,7 @@ enum ExclusionMod {
 
 enum RoleName {
   SUPER_ADMIN
-  ADMIN_RELIEF
+  ADMIN
 }
 
 enum TelegramJenis {

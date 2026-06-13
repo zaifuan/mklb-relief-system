@@ -38,7 +38,7 @@ export default function LoginPage() {
             <source srcSet="/logo-sekolah.webp" type="image/webp" />
             <img className="logo" src="/logo-sekolah.png" alt="Logo SABK Maahad Al-Khair Lil Banat" />
           </picture>
-          <div className="eyebrow">Panel Pentadbir</div>
+          <div className="eyebrow">Log Masuk Sistem</div>
           <h1 className="title">Jadual Guru Ganti</h1>
           <p className="sub">SABK Maahad Al-Khair Lil Banat</p>
         </div>
@@ -55,7 +55,7 @@ export default function LoginPage() {
             autoFocus
             value={username}
             onChange={(e) => setUsername(e.target.value)}
-            placeholder="cth: zai"
+            placeholder="Masukkan nama pengguna"
           />
 
           <label htmlFor="password" className="lbl">Kata laluan</label>

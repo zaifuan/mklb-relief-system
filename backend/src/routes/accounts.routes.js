@@ -1,18 +1,18 @@
 // ════════════════════════════════════════════════════════════
-//  Routes: /api/relief  (Fasa 6 — Relief Engine)
-//  Semua perlu login admin (SUPER_ADMIN atau ADMIN).
+//  Routes: /api/admin/accounts  (Tetapan Akaun)
+//  SUPER_ADMIN sahaja. Admin biasa tidak boleh akses.
 // ════════════════════════════════════════════════════════════
 
 import { Router } from 'express';
-import { generateRelief, getReliefByTarikh } from '../controllers/relief.controller.js';
+import { getAccounts, updateAccounts } from '../controllers/accounts.controller.js';
 import { authenticate } from '../middleware/authenticate.js';
 import { authorize } from '../middleware/authorize.js';
 
 const router = Router();
 
-router.use(authenticate, authorize('SUPER_ADMIN', 'ADMIN'));
+router.use(authenticate, authorize('SUPER_ADMIN'));
 
-router.post('/generate', generateRelief);
-router.get('/:tarikh', getReliefByTarikh);
+router.get('/', getAccounts);
+router.patch('/', updateAccounts);
 
 export default router;

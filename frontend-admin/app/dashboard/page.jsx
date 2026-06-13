@@ -8,7 +8,7 @@ import { clearToken } from '../../lib/auth.js';
 
 const ROLE_LABEL = {
   SUPER_ADMIN: 'Super Admin',
-  ADMIN_RELIEF: 'Admin Relief',
+  ADMIN: 'Admin',
 };
 
 export default function DashboardPage() {
@@ -103,7 +103,7 @@ export default function DashboardPage() {
           <div className="bname">Jadual Guru Ganti</div>
         </div>
         <div className="right">
-          <span className="who">{user.nama}</span>
+          <span className="who">{roleLabel}</span>
           <button className="logout" onClick={handleLogout} disabled={busy}>
             {busy ? 'Keluar…' : 'Log Keluar'}
           </button>
@@ -121,26 +121,16 @@ export default function DashboardPage() {
             Fasa 2 Authentication Berjaya
           </div>
 
-          <h1 className="hello">Selamat datang, {user.nama.split(' ')[0]}.</h1>
+          <h1 className="hello">Selamat datang, {roleLabel}.</h1>
           <p className="lede">Anda telah log masuk ke panel pentadbir.</p>
 
           <dl className="facts">
-            <div className="row">
-              <dt>Nama pengguna</dt>
-              <dd>{user.nama}</dd>
-            </div>
             <div className="row">
               <dt>Peranan</dt>
               <dd>
                 <span className={`badge ${roleKey === 'SUPER_ADMIN' ? 'gold' : 'green'}`}>{roleLabel}</span>
               </dd>
             </div>
-            {user.hariBertugas && (
-              <div className="row">
-                <dt>Hari bertugas</dt>
-                <dd className="cap">{user.hariBertugas.toLowerCase()}</dd>
-              </div>
-            )}
           </dl>
 
           <Link href="/dashboard/absence" className="modul">
@@ -158,6 +148,16 @@ export default function DashboardPage() {
             </div>
             <span className="modulArrow" aria-hidden="true">→</span>
           </Link>
+
+          {roleKey === 'SUPER_ADMIN' && (
+            <Link href="/dashboard/tetapan" className="modul">
+              <div>
+                <div className="modulTitle">Tetapan Akaun</div>
+                <div className="modulSub">Urus username &amp; kata laluan Super Admin &amp; Admin</div>
+              </div>
+              <span className="modulArrow" aria-hidden="true">→</span>
+            </Link>
+          )}
 
           {roleKey === 'SUPER_ADMIN' && (
             <section className="sync">

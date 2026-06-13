@@ -272,13 +272,10 @@ export default function Page() {
 
       <section className="card">
         <header className="head">
-          <span className="mark" aria-hidden="true">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-              <rect x="3" y="3" width="18" height="18" rx="3" stroke="white" strokeWidth="1.6" />
-              <path d="M3 9h18M3 15h18M9 3v18M15 3v18" stroke="white" strokeWidth="1.1" opacity="0.85" />
-              <rect x="9" y="9" width="6" height="6" fill="#C9A227" />
-            </svg>
-          </span>
+          <picture className="logoWrap">
+            <source srcSet="/logo-sekolah.webp" type="image/webp" />
+            <img className="logo" src="/logo-sekolah.png" alt="Logo SABK Maahad Al-Khair Lil Banat" />
+          </picture>
           <div>
             <div className="eyebrow">Borang Ketidakhadiran Guru</div>
             <div className="school">SABK Maahad Al-Khair Lil Banat</div>
@@ -709,15 +706,16 @@ export default function Page() {
           margin-bottom: 18px;
           border-bottom: 1px solid #eef2f0;
         }
-        .mark {
+        .logoWrap {
           flex: none;
           display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 40px;
-          height: 40px;
-          border-radius: 10px;
-          background: linear-gradient(160deg, #0f766e, #0b5e57);
+        }
+        .logo {
+          flex: none;
+          height: 88px;
+          width: auto;
+          object-fit: contain;
+          display: block;
         }
         .eyebrow {
           font-size: 15px;
@@ -1095,6 +1093,11 @@ export default function Page() {
           .btn,
           .segBtn {
             transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
+          }
+        }
+        @media (max-width: 480px) {
+          .logo {
+            height: 70px;
           }
         }
       `}</style>

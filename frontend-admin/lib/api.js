@@ -50,6 +50,11 @@ export const api = {
   logout: () => request('/api/auth/logout', { method: 'POST' }),
   me: () => request('/api/auth/me'),
 
+  accounts: {
+    get: () => request('/api/admin/accounts'),
+    update: (payload) => request('/api/admin/accounts', { method: 'PATCH', body: payload }),
+  },
+
   // Pilihan awam (senarai guru + label sebab/jenis) untuk dropdown penapis
   publicOptions: () => request('/api/absence/public/options', { auth: false }),
 

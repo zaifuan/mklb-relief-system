@@ -12,6 +12,7 @@ import authRoutes from './routes/auth.routes.js';
 import syncRoutes from './routes/sync.routes.js';
 import absenceRoutes from './routes/absence.routes.js';
 import adminAbsenceRoutes from './routes/adminAbsence.routes.js';
+import accountRoutes from './routes/accounts.routes.js';
 import reliefRoutes from './routes/relief.routes.js';
 import reliefAssignmentRoutes from './routes/reliefAssignment.routes.js';
 import telegramRoutes from './routes/telegram.routes.js';
@@ -49,6 +50,7 @@ app.use('/api/absence', absenceRoutes);
 
 // ── Dashboard Admin Ketidakhadiran (Fasa 5) ──
 app.use('/api/admin/absence', adminAbsenceRoutes);
+app.use('/api/admin/accounts', accountRoutes);
 
 // ── Relief Engine (Fasa 6) + Semakan cadangan (Fasa 7) ──
 // Daftar /assignment DAHULU supaya PATCH tidak ditangkap oleh GET /:tarikh.

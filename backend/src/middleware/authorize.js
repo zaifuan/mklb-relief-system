@@ -1,7 +1,7 @@
 // ════════════════════════════════════════════════════════════
 //  Middleware: authorize(...roles)
 //  Contoh: authorize('SUPER_ADMIN')
-//          authorize('SUPER_ADMIN', 'ADMIN_RELIEF')
+//          authorize('SUPER_ADMIN', 'ADMIN')
 //  Mesti digunakan SELEPAS authenticate.
 // ════════════════════════════════════════════════════════════
 
