@@ -16,6 +16,7 @@ export default function DashboardPage() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [tg, setTg] = useState(null);
 
   // Sync Google Sheet (Super Admin)
   const [syncBusy, setSyncBusy] = useState(false);
@@ -40,6 +41,17 @@ export default function DashboardPage() {
       alive = false;
     };
   }, [router]);
+
+  useEffect(() => {
+    let alive = true;
+    api.telegram
+      .status()
+      .then((st) => alive && setTg(st))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   async function handleLogout() {
     if (busy) return;
@@ -160,6 +172,16 @@ export default function DashboardPage() {
           )}
 
           {roleKey === 'SUPER_ADMIN' && (
+            <Link href="/dashboard/tetapan-telegram" className="modul">
+              <div>
+                <div className="modulTitle">Tetapan Telegram</div>
+                <div className="modulSub">Snapshot automatik, masa &amp; realtime notifikasi</div>
+              </div>
+              <span className="modulArrow" aria-hidden="true">→</span>
+            </Link>
+          )}
+
+          {roleKey === 'SUPER_ADMIN' && (
             <section className="sync">
               <div className="syncTitle">Sync Google Sheet</div>
               <div className="syncSub">
@@ -184,7 +206,29 @@ export default function DashboardPage() {
             </section>
           )}
 
-          <p className="note">Modul Telegram &amp; PDF akan tersedia pada fasa seterusnya.</p>
+          <section className="tgStatus">
+            <div className="tgHead">
+              <span className="tgTitle">Telegram Status</span>
+              {tg && (
+                <span className={`tgPill ${tg.autoSnapshot ? 'on' : 'off'}`}>
+                  Auto {tg.autoSnapshot ? 'ON' : 'OFF'}
+                </span>
+              )}
+            </div>
+            {tg ? (
+              <div className="tgGrid">
+                <span>Bot: <b>{tg.botConnected ? '✓' : '✗'}</b></span>
+                <span>Chat ID: <b>{tg.chatConfigured ? '✓' : '✗'}</b></span>
+                <span>Realtime: <b>{tg.realtime ? 'ON' : 'OFF'}</b></span>
+                <span>Masa: <b>{tg.snapshotTimeLabel || '—'}</b></span>
+                <span className="tgWide">
+                  Snapshot terakhir: <b>{tg.lastSnapshot?.masa || 'Tiada lagi'}</b>
+                </span>
+              </div>
+            ) : (
+              <div className="tgMuted">Memuatkan status…</div>
+            )}
+          </section>
         </div>
       </main>
 
@@ -342,6 +386,57 @@ export default function DashboardPage() {
           color: #8a6d12;
           background: #faf3df;
           border: 1px solid #ecdcae;
+        }
+        .tgStatus {
+          margin-top: 22px;
+          padding: 14px 16px;
+          background: #f1f5f4;
+          border: 1px solid #d8e2de;
+          border-radius: 12px;
+        }
+        .tgHead {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 10px;
+        }
+        .tgTitle {
+          font-size: 14px;
+          font-weight: 700;
+          color: #0f2a23;
+        }
+        .tgPill {
+          font-size: 12px;
+          font-weight: 700;
+          padding: 2px 10px;
+          border-radius: 999px;
+        }
+        .tgPill.on {
+          color: #0b5e57;
+          background: #e6f4f0;
+          border: 1px solid #c2e3da;
+        }
+        .tgPill.off {
+          color: #6b7c77;
+          background: #fff;
+          border: 1px solid #dde7e4;
+        }
+        .tgGrid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 6px 14px;
+          font-size: 13px;
+          color: #5b716a;
+        }
+        .tgGrid b {
+          color: #14302b;
+        }
+        .tgWide {
+          grid-column: 1 / -1;
+        }
+        .tgMuted {
+          font-size: 13px;
+          color: #80958e;
         }
         .note {
           margin: 22px 0 0;

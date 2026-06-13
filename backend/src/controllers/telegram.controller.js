@@ -3,7 +3,7 @@
 //    previewSnapshot  GET  /api/telegram/snapshot/preview?tarikh=YYYY-MM-DD
 //    sendSnapshot     POST /api/telegram/snapshot/send  { tarikh? }
 //
-//  • preview: SUPER_ADMIN + ADMIN_RELIEF (bina teks sahaja, tiada hantar)
+//  • preview: SUPER_ADMIN + ADMIN (bina teks sahaja, tiada hantar)
 //  • send: SUPER_ADMIN sahaja (lihat routes) — hantar + log
 //  • Jika tiada rekod AKTIF → tidak hantar (status TIADA)
 //  • Log: telegram_logs (berstruktur) + audit_logs (TELEGRAM_SNAPSHOT_SEND)
@@ -14,6 +14,9 @@ import prisma from '../lib/prisma.js';
 import { writeAudit, getClientIp } from '../lib/audit.js';
 import { buildSnapshot, tarikhKeUtcDate, masaSekarangKL } from '../services/snapshot.service.js';
 import { sendTelegramMessage, isTelegramConfigured } from '../lib/telegram.js';
+import { getTelegramSettings, setTelegramSettings, snapshotTimeLabel } from '../lib/telegramSettings.js';
+
+const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 const TARIKH_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -91,8 +94,12 @@ export async function sendSnapshot(req, res) {
       data: {
         tarikh: tarikhKeUtcDate(tarikh),
         jenis: 'MANUAL',
+        triggerType: 'MANUAL',
+        totalRecords: snap.jumlahGuru,
         messageText: snap.text,
         telegramMessageId: hasil.messageId || null,
+        success: hasil.ok,
+        errorMessage: hasil.ok ? null : hasil.error || 'tidak diketahui',
         status: hasil.ok ? 'OK' : `GAGAL: ${hasil.error || 'tidak diketahui'}`,
       },
     });
@@ -126,5 +133,84 @@ export async function sendSnapshot(req, res) {
     if (err.code === 'BAD_DATE') return res.status(400).json({ mesej: err.message });
     console.error('sendSnapshot ERROR:', err);
     res.status(500).json({ status: 'ERROR', mesej: 'Ralat menghantar snapshot', error: err.message });
+  }
+}
+
+// ── GET /api/telegram/settings (Super Admin + Admin) ──
+export async function getSettings(req, res) {
+  try {
+    const s = await getTelegramSettings();
+    res.json(s);
+  } catch (err) {
+    console.error('getSettings ERROR:', err);
+    res.status(500).json({ mesej: 'Ralat membaca tetapan Telegram', error: err.message });
+  }
+}
+
+// ── PATCH /api/telegram/settings (Super Admin) ──
+export async function updateSettings(req, res) {
+  const parsed = z
+    .object({
+      autoSnapshot: z.boolean().optional(),
+      realtime: z.boolean().optional(),
+      snapshotTime: z.string().regex(TIME_RE).optional(),
+    })
+    .safeParse(req.body || {});
+  if (!parsed.success) {
+    return res.status(400).json({ mesej: 'Input tidak sah (snapshotTime perlu format HH:MM 24-jam).' });
+  }
+  try {
+    const before = await getTelegramSettings();
+    const after = await setTelegramSettings(parsed.data);
+    await writeAudit({
+      userId: req.user?.id || null,
+      action: 'TELEGRAM_SETTINGS_UPDATE',
+      entity: 'telegram_settings',
+      detail: { before, after },
+      ip: getClientIp(req),
+    });
+    res.json(after);
+  } catch (err) {
+    if (err.code === 'BAD_TIME') return res.status(400).json({ mesej: err.message });
+    console.error('updateSettings ERROR:', err);
+    res.status(500).json({ mesej: 'Ralat menyimpan tetapan Telegram', error: err.message });
+  }
+}
+
+// ── GET /api/telegram/status (Super Admin + Admin) ──
+export async function getStatus(req, res) {
+  try {
+    const s = await getTelegramSettings();
+    const last = await prisma.telegramLog.findFirst({
+      where: { jenis: { in: ['SNAPSHOT', 'MANUAL', 'REALTIME'] }, status: 'OK' },
+      orderBy: { sentAt: 'desc' },
+    });
+
+    let lastSnapshot = null;
+    if (last) {
+      const masa = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Kuala_Lumpur',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      }).format(last.sentAt);
+      lastSnapshot = { masa, jenis: last.jenis, totalRecords: last.totalRecords ?? null };
+    }
+
+    res.json({
+      botConnected: !!process.env.TELEGRAM_BOT_TOKEN,
+      chatConfigured: !!process.env.TELEGRAM_CHAT_ID,
+      autoSnapshot: s.autoSnapshot,
+      snapshotTime: s.snapshotTime,
+      snapshotTimeLabel: snapshotTimeLabel(s.snapshotTime),
+      realtime: s.realtime,
+      lastSnapshot,
+    });
+  } catch (err) {
+    console.error('getStatus ERROR:', err);
+    res.status(500).json({ mesej: 'Ralat status Telegram', error: err.message });
   }
 }

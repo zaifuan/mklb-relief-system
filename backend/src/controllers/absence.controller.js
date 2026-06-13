@@ -226,8 +226,12 @@ export async function createAbsence(req, res) {
       ip: getClientIp(req),
     });
 
-    // ── Telegram realtime (Fasa 9) — tiap rekod baharu; gate kendali "hari ini" ──
+    // ── Telegram realtime — resend snapshot PENUH; sekali sahaja per tarikh ──
+    const _seenTarikhRT = new Set();
     for (const rec of rekodBaharu) {
+      const key = rec.tarikh instanceof Date ? rec.tarikh.toISOString().slice(0, 10) : String(rec.tarikh);
+      if (_seenTarikhRT.has(key)) continue;
+      _seenTarikhRT.add(key);
       try {
         await sendRealtime(rec, { ip: getClientIp(req) });
       } catch (e) {

@@ -112,10 +112,15 @@ export const api = {
     pdf: (tarikh) => requestBlob(`/api/relief/${tarikh}/pdf`),
   },
 
-  // Telegram snapshot ketidakhadiran (Fasa 8)
+  // Telegram snapshot ketidakhadiran (Fasa 8) + tetapan/status (Fasa 7)
   telegram: {
     preview: (tarikh) => request(`/api/telegram/snapshot/preview${qs({ tarikh })}`),
     send: (tarikh) => request('/api/telegram/snapshot/send', { method: 'POST', body: { tarikh } }),
+    settings: {
+      get: () => request('/api/telegram/settings'),
+      update: (body) => request('/api/telegram/settings', { method: 'PATCH', body }),
+    },
+    status: () => request('/api/telegram/status'),
   },
 
   // Sync Google Sheet (master data) — run hanya SUPER_ADMIN

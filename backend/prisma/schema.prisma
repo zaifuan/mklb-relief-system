@@ -312,8 +312,12 @@ model TelegramLog {
   id                Int           @id @default(autoincrement())
   tarikh            DateTime?     @db.Date
   jenis             TelegramJenis
+  triggerType       String? // AUTO | MANUAL | REALTIME | PEMBATALAN
+  totalRecords      Int?
   messageText       String?
   telegramMessageId String?
+  success           Boolean?
+  errorMessage      String?
   status            String?
   sentAt            DateTime      @default(now())
 

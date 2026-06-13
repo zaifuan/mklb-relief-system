@@ -190,8 +190,12 @@ export async function cancelGroup(req, res) {
       ip: getClientIp(req),
     });
 
-    // Telegram pembatalan per rekod (servis sedia ada; gate kendali "hari ini") — tidak blok
+    // Telegram pembatalan — resend snapshot PENUH; sekali sahaja per tarikh
+    const _seenTarikhPB = new Set();
     for (const rec of records) {
+      const key = rec.tarikh instanceof Date ? rec.tarikh.toISOString().slice(0, 10) : String(rec.tarikh);
+      if (_seenTarikhPB.has(key)) continue;
+      _seenTarikhPB.add(key);
       try {
         await sendPembatalan(rec, { userId: req.user?.id ?? null, ip: getClientIp(req) });
       } catch (e) {

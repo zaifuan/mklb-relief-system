@@ -1,28 +1,23 @@
 // ════════════════════════════════════════════════════════════
-//  telegramNotify.service.js — Telegram automatik (Fasa 9)
-//    • runMorningSnapshot()  → snapshot pagi 5:30 (penuh, dedup harian)
-//    • sendRealtime(rec)     → "KETIDAKHADIRAN BAHARU" (satu rekod)
-//    • sendPembatalan(rec)   → "PEMBATALAN KETIDAKHADIRAN" (satu rekod)
+//  telegramNotify.service.js — Telegram automatik (FASA 7/9)
+//    • runMorningSnapshot()  → snapshot pagi auto (penuh, dedup harian)
+//    • sendRealtime(rec)     → resend SNAPSHOT PENUH (seperti GAS)
+//    • sendPembatalan(rec)   → resend SNAPSHOT PENUH + prefix ⚠️ PEMBATALAN
 //
-//  Reka bentuk (keputusan Fasa 9):
-//    • Hibrid: pagi = snapshot PENUH (buildSnapshot F8, isAutoSnapshot);
-//      realtime & pembatalan = mesej SATU REKOD (format baharu).
-//    • Syarat cetus realtime/pembatalan (ikut GAS):
-//        tarikh rekod = hari ini (KL)  DAN  masa semasa ≥ 5:30 pagi.
-//    • MC/CRK/CTR → tanpa detail; PROGRAM_*/LAIN_LAIN → sertakan sebabDetail.
-//    • Dedup pagi: telegram_logs { jenis:SNAPSHOT, tarikh, status:OK }.
-//    • Tidak mengubah F8 — hanya guna semula buildSnapshot + sendTelegramMessage.
-//    • Kegagalan Telegram TIDAK boleh gagalkan borang/tindakan (try/catch di caller).
+//  Tetapan DB (telegramSettings):
+//    • autoSnapshot ON/OFF  • snapshotTime "HH:MM"  • realtime ON/OFF
+//    • DEFAULT semua OFF — sekolah masih guna GAS minggu ini.
+//
+//  Gerbang realtime/pembatalan (ikut GAS, tapi guna masa tetapan):
+//    realtime ON  DAN  tarikh rekod = hari ini (KL)  DAN  masa kini ≥ snapshotTime.
+//  Kegagalan Telegram TIDAK boleh gagalkan borang/tindakan (try/catch caller).
 // ════════════════════════════════════════════════════════════
 
 import prisma from '../lib/prisma.js';
 import { writeAudit } from '../lib/audit.js';
 import { sendTelegramMessage, isTelegramConfigured } from '../lib/telegram.js';
-import { buildSnapshot, masaSekarangKL, tarikhKeUtcDate } from './snapshot.service.js';
-import { SEBAB_LABEL } from '../lib/absenceConstants.js';
-
-const MC_KATEGORI = ['MC', 'CRK', 'CTR'];
-const SNAP_MINIT = 5 * 60 + 30; // 5:30 pagi = 330 minit
+import { buildSnapshot, tarikhKeUtcDate } from './snapshot.service.js';
+import { getTelegramSettings, snapshotMinit, snapshotTimeLabel } from '../lib/telegramSettings.js';
 
 // ── Bantuan masa/tarikh (zon Asia/Kuala_Lumpur) ──
 function todayKLStr() {
@@ -53,28 +48,28 @@ function rekodTarikhStr(d) {
   return `${y}-${m}-${day}`;
 }
 
-// Date (@db.Date) → "10/6/2026" (tanpa sifar awalan)
-function tarikhDisplay(d) {
-  return `${d.getUTCDate()}/${d.getUTCMonth() + 1}/${d.getUTCFullYear()}`;
-}
-
-// Syarat cetus realtime/pembatalan (ikut GAS shouldTriggerRealtimeUpdate)
-function bolehHantarRealtime(rekodTarikhDate) {
-  if (!(rekodTarikhDate instanceof Date)) return false;
-  if (rekodTarikhStr(rekodTarikhDate) !== todayKLStr()) return false; // hanya hari ini
-  if (sekarangMinitKL() < SNAP_MINIT) return false; // hanya selepas 5:30 pagi
-  return true;
-}
+// Map jenis log → trigger_type (ikut prompt #12)
+const TRIGGER_MAP = {
+  SNAPSHOT: 'AUTO',
+  MANUAL: 'MANUAL',
+  REALTIME: 'REALTIME',
+  PEMBATALAN: 'PEMBATALAN',
+  RELIEF_PDF: 'MANUAL',
+};
 
 // Rekod ke telegram_logs (jaya/gagal) — tidak melempar
-async function logTelegram({ tarikhDate, jenis, text, hasil }) {
+async function logTelegram({ tarikhDate, jenis, text, hasil, totalRecords = null }) {
   try {
     await prisma.telegramLog.create({
       data: {
         tarikh: tarikhDate || null,
         jenis,
+        triggerType: TRIGGER_MAP[jenis] || null,
+        totalRecords,
         messageText: text,
         telegramMessageId: hasil?.messageId || null,
+        success: !!hasil?.ok,
+        errorMessage: hasil?.ok ? null : hasil?.error || 'tidak diketahui',
         status: hasil?.ok ? 'OK' : `GAGAL: ${hasil?.error || 'tidak diketahui'}`,
       },
     });
@@ -83,53 +78,35 @@ async function logTelegram({ tarikhDate, jenis, text, hasil }) {
   }
 }
 
-// ── BINA MESEJ SATU REKOD ─────────────────────────────────
-export function buildRealtimeMessage(rec) {
-  const nama = String(rec.guruNama || '').trim();
-  const kat = String(rec.sebabKategori || '').trim().toUpperCase();
-  const detail = String(rec.sebabDetail || '').trim();
-  const katLabel = SEBAB_LABEL[kat] || kat;
-
-  let msg = 'KETIDAKHADIRAN BAHARU\n\n';
-  msg += nama + '\n\n';
-  msg += 'Tarikh:\n' + tarikhDisplay(rec.tarikh) + '\n\n';
-  msg += 'Kategori:\n' + katLabel;
-  if (!MC_KATEGORI.includes(kat) && detail) msg += '\n' + detail;
-  msg += '\n\nMasa:\n' + masaSekarangKL();
-  return msg;
+// Gerbang realtime/pembatalan: realtime ON + tarikh hari ini + selepas snapshotTime
+async function bolehHantarRealtime(rekodTarikhDate, settings) {
+  if (!settings.realtime) return false;
+  if (!(rekodTarikhDate instanceof Date)) return false;
+  if (rekodTarikhStr(rekodTarikhDate) !== todayKLStr()) return false; // hanya hari ini
+  if (sekarangMinitKL() < snapshotMinit(settings.snapshotTime)) return false; // selepas masa tetapan
+  return true;
 }
 
-export function buildPembatalanMessage(rec) {
-  const nama = String(rec.guruNama || '').trim();
-  const kat = String(rec.sebabKategori || '').trim().toUpperCase();
-  const detail = String(rec.sebabDetail || '').trim();
-  const katLabel = SEBAB_LABEL[kat] || kat;
-
-  let msg = 'PEMBATALAN KETIDAKHADIRAN\n\n';
-  msg += 'Nama:\n' + nama + '\n\n';
-  msg += 'Tarikh:\n' + tarikhDisplay(rec.tarikh) + '\n\n';
-  msg += 'Kategori:\n' + katLabel;
-  if (!MC_KATEGORI.includes(kat) && detail) msg += '\n' + detail;
-  msg += '\n\nMasa:\n' + masaSekarangKL();
-  return msg;
-}
-
-// ── HANTAR REALTIME (selepas submit borang) ───────────────
+// ── HANTAR REALTIME (selepas tambah/kemaskini rekod) — snapshot PENUH ──
 export async function sendRealtime(rec, { ip = null } = {}) {
   try {
-    if (!bolehHantarRealtime(rec.tarikh)) return { skipped: true, reason: 'GATE' };
+    const settings = await getTelegramSettings();
+    if (!(await bolehHantarRealtime(rec.tarikh, settings))) return { skipped: true, reason: 'GATE' };
     if (!isTelegramConfigured()) return { skipped: true, reason: 'NO_CONFIG' };
 
-    const text = buildRealtimeMessage(rec);
-    const hasil = await sendTelegramMessage(text);
-    await logTelegram({ tarikhDate: rec.tarikh, jenis: 'REALTIME', text, hasil });
+    const tarikhStr = rekodTarikhStr(rec.tarikh);
+    const snap = await buildSnapshot({ tarikh: tarikhStr }); // header manual "KEMASKINI…"
+    if (!snap.adaRekod) return { skipped: true, reason: 'TIADA' };
+
+    const hasil = await sendTelegramMessage(snap.text);
+    await logTelegram({ tarikhDate: rec.tarikh, jenis: 'REALTIME', text: snap.text, hasil, totalRecords: snap.jumlahGuru });
 
     if (hasil.ok) {
       await writeAudit({
         userId: null,
         action: 'TELEGRAM_REALTIME_SEND',
         entity: 'telegram_realtime',
-        detail: { reference: rec.reference, guru: rec.guruNama, tarikh: rekodTarikhStr(rec.tarikh) },
+        detail: { tarikh: tarikhStr, jumlahGuru: snap.jumlahGuru, dicetus: rec.reference || null },
         ip,
       });
     }
@@ -140,22 +117,27 @@ export async function sendRealtime(rec, { ip = null } = {}) {
   }
 }
 
-// ── HANTAR PEMBATALAN (status → DIBATALKAN) ───────────────
+// ── HANTAR PEMBATALAN (status → DIBATALKAN) — snapshot PENUH + ⚠️ ──
+//  Panggil SELEPAS rekod ditandakan DIBATALKAN supaya snapshot tidak lagi
+//  memaparkan rekod tersebut (sama gaya GAS).
 export async function sendPembatalan(rec, { userId = null, ip = null } = {}) {
   try {
-    if (!bolehHantarRealtime(rec.tarikh)) return { skipped: true, reason: 'GATE' };
+    const settings = await getTelegramSettings();
+    if (!(await bolehHantarRealtime(rec.tarikh, settings))) return { skipped: true, reason: 'GATE' };
     if (!isTelegramConfigured()) return { skipped: true, reason: 'NO_CONFIG' };
 
-    const text = buildPembatalanMessage(rec);
-    const hasil = await sendTelegramMessage(text);
-    await logTelegram({ tarikhDate: rec.tarikh, jenis: 'PEMBATALAN', text, hasil });
+    const tarikhStr = rekodTarikhStr(rec.tarikh);
+    const snap = await buildSnapshot({ tarikh: tarikhStr, pembatalan: true });
+
+    const hasil = await sendTelegramMessage(snap.text);
+    await logTelegram({ tarikhDate: rec.tarikh, jenis: 'PEMBATALAN', text: snap.text, hasil, totalRecords: snap.jumlahGuru });
 
     if (hasil.ok) {
       await writeAudit({
         userId,
         action: 'TELEGRAM_PEMBATALAN_SEND',
         entity: 'telegram_pembatalan',
-        detail: { reference: rec.reference, guru: rec.guruNama, tarikh: rekodTarikhStr(rec.tarikh) },
+        detail: { tarikh: tarikhStr, jumlahGuru: snap.jumlahGuru, dicetus: rec.reference || null },
         ip,
       });
     }
@@ -166,11 +148,17 @@ export async function sendPembatalan(rec, { userId = null, ip = null } = {}) {
   }
 }
 
-// ── SNAPSHOT PAGI AUTO (5:30) ─────────────────────────────
-// force=true → langkau semakan hujung minggu + dedup (untuk ujian)
+// ── SNAPSHOT PAGI AUTO ────────────────────────────────────
+//  force=true → langkau semakan autoSnapshot + hujung minggu + dedup (ujian)
 export async function runMorningSnapshot({ force = false } = {}) {
+  const settings = await getTelegramSettings();
   const tarikh = todayKLStr();
   const tarikhDate = tarikhKeUtcDate(tarikh);
+
+  // Hormati tetapan auto OFF (kecuali force untuk ujian)
+  if (!force && !settings.autoSnapshot) {
+    return { status: 'SKIP', reason: 'AUTO_OFF', tarikh };
+  }
 
   // Langkau Sabtu/Ahad (ikut GAS), kecuali force
   const dow = tarikhDate.getUTCDay(); // 0=Ahad, 6=Sabtu
@@ -186,13 +174,14 @@ export async function runMorningSnapshot({ force = false } = {}) {
     if (sudah) return { status: 'SKIP', reason: 'SUDAH_DIHANTAR', tarikh };
   }
 
-  const snap = await buildSnapshot({ tarikh, isAutoSnapshot: true });
+  const autoLabel = snapshotTimeLabel(settings.snapshotTime);
+  const snap = await buildSnapshot({ tarikh, isAutoSnapshot: true, autoLabel });
   if (!snap.adaRekod) return { status: 'TIADA', tarikh, jumlahGuru: 0 };
 
   if (!isTelegramConfigured()) return { status: 'ERROR', reason: 'NO_CONFIG', tarikh };
 
   const hasil = await sendTelegramMessage(snap.text);
-  await logTelegram({ tarikhDate, jenis: 'SNAPSHOT', text: snap.text, hasil });
+  await logTelegram({ tarikhDate, jenis: 'SNAPSHOT', text: snap.text, hasil, totalRecords: snap.jumlahGuru });
 
   if (!hasil.ok) {
     return { status: 'ERROR', tarikh, jumlahGuru: snap.jumlahGuru, error: hasil.error };
@@ -202,7 +191,7 @@ export async function runMorningSnapshot({ force = false } = {}) {
     userId: null,
     action: 'TELEGRAM_SNAPSHOT_AUTO',
     entity: 'telegram_snapshot',
-    detail: { tarikh, jumlahGuru: snap.jumlahGuru, auto: true },
+    detail: { tarikh, jumlahGuru: snap.jumlahGuru, auto: true, masa: autoLabel },
     ip: null,
   });
 
