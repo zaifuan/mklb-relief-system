@@ -572,13 +572,6 @@ export default function Page() {
               onChange={(e) => set('catatan', e.target.value)}
             />
 
-            {/* Lampiran — placeholder sahaja */}
-            <span className="lbl">Lampiran</span>
-            <div className="lampiran" aria-disabled="true">
-              <span>Muat naik lampiran</span>
-              <span className="soon">Akan datang</span>
-            </div>
-
             {error && <div className="alert" role="alert" aria-live="assertive">{error}</div>}
 
             <button type="submit" className="btn" disabled={submitting || loadingOpts}>
@@ -836,25 +829,6 @@ export default function Page() {
         }
         .chipX:hover {
           background: rgba(11, 94, 87, 0.22);
-        }
-        .lampiran {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          padding: 13px;
-          font-size: 13.5px;
-          color: #93a39d;
-          background: #f7faf9;
-          border: 1px dashed #cfdbd6;
-          border-radius: 10px;
-        }
-        .soon {
-          font-size: 11px;
-          font-weight: 600;
-          color: #0f766e;
-          background: #e6f4f0;
-          padding: 3px 9px;
-          border-radius: 999px;
         }
         .alert {
           margin-top: 16px;
