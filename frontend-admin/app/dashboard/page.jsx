@@ -96,13 +96,10 @@ export default function DashboardPage() {
     <div className="wrap">
       <header className="bar">
         <div className="brand">
-          <span className="mark" aria-hidden="true">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <rect x="3" y="3" width="18" height="18" rx="3" stroke="white" strokeWidth="1.6" />
-              <path d="M3 9h18M3 15h18M9 3v18M15 3v18" stroke="white" strokeWidth="1.1" opacity="0.85" />
-              <rect x="9" y="9" width="6" height="6" fill="#C9A227" />
-            </svg>
-          </span>
+          <picture className="logoWrap">
+            <source srcSet="/logo-sekolah.webp" type="image/webp" />
+            <img className="logo" src="/logo-sekolah.png" alt="Logo SABK Maahad Al-Khair Lil Banat" />
+          </picture>
           <div className="bname">Jadual Guru Ganti</div>
         </div>
         <div className="right">
@@ -210,14 +207,15 @@ export default function DashboardPage() {
           align-items: center;
           gap: 10px;
         }
-        .mark {
+        .logoWrap {
+          flex: none;
           display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 32px;
+        }
+        .logo {
           height: 32px;
-          border-radius: 9px;
-          background: linear-gradient(160deg, #0f766e, #0b5e57);
+          width: auto;
+          object-fit: contain;
+          display: block;
         }
         .bname {
           font-size: 15px;
