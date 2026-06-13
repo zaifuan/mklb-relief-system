@@ -60,6 +60,8 @@ export const api = {
     get: (id) => request(`/api/admin/absence/${id}`),
     updateStatus: (id, status) =>
       request(`/api/admin/absence/${id}/status`, { method: 'PATCH', body: { status } }),
+    cancelGroup: (groupReference) =>
+      request(`/api/admin/absence/group/${encodeURIComponent(groupReference)}/cancel`, { method: 'PATCH' }),
     remove: (id) => request(`/api/admin/absence/${id}`, { method: 'DELETE' }),
   },
 

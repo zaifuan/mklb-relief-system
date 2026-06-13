@@ -53,10 +53,7 @@ export async function listAbsence(req, res) {
     if (t) where.tarikh = t;
 
     if (q && q.trim()) {
-      where.OR = [
-        { guruNama: { contains: q.trim(), mode: 'insensitive' } },
-        { reference: { contains: q.trim(), mode: 'insensitive' } },
-      ];
+      where.guruNama = { contains: q.trim(), mode: 'insensitive' };
     }
 
     const records = await prisma.absenceRecord.findMany({
@@ -65,6 +62,7 @@ export async function listAbsence(req, res) {
       select: {
         id: true,
         reference: true,
+        groupReference: true,
         tarikh: true,
         hari: true,
         guruNama: true,
@@ -160,6 +158,48 @@ export async function updateStatus(req, res) {
     }
 
     res.json({ success: true, record: updated });
+  } catch (err) {
+    res.status(500).json({ mesej: err.message });
+  }
+}
+
+// PATCH /api/admin/absence/group/:groupReference/cancel
+// Batalkan SEMUA rekod AKTIF yang berkongsi groupReference (satu submit kumpulan).
+export async function cancelGroup(req, res) {
+  try {
+    const groupReference = String(req.params.groupReference || '').trim();
+    if (!groupReference) return res.status(400).json({ mesej: 'groupReference diperlukan' });
+
+    const records = await prisma.absenceRecord.findMany({
+      where: { groupReference, statusBorang: 'AKTIF', deletedAt: null },
+    });
+    if (records.length === 0) {
+      return res.status(404).json({ mesej: 'Tiada rekod AKTIF dalam kumpulan ini.' });
+    }
+
+    await prisma.absenceRecord.updateMany({
+      where: { groupReference, statusBorang: 'AKTIF', deletedAt: null },
+      data: { statusBorang: 'DIBATALKAN' },
+    });
+
+    await writeAudit({
+      userId: req.user?.id ?? null,
+      action: 'ABSENCE_CANCEL_GROUP',
+      entity: 'ABSENCE',
+      detail: { groupReference, dibatalkan: records.length, references: records.map((r) => r.reference) },
+      ip: getClientIp(req),
+    });
+
+    // Telegram pembatalan per rekod (servis sedia ada; gate kendali "hari ini") — tidak blok
+    for (const rec of records) {
+      try {
+        await sendPembatalan(rec, { userId: req.user?.id ?? null, ip: getClientIp(req) });
+      } catch (e) {
+        console.error('sendPembatalan (cancelGroup) ERROR:', e.message);
+      }
+    }
+
+    res.json({ success: true, dibatalkan: records.length, groupReference });
   } catch (err) {
     res.status(500).json({ mesej: err.message });
   }

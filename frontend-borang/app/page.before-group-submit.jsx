@@ -64,9 +64,6 @@ export default function Page() {
     masaTamat: '',
     catatan: '',
   });
-  // Mod individu / kumpulan
-  const [mode, setMode] = useState('individu'); // 'individu' | 'kumpulan'
-  const [guruList, setGuruList] = useState([]); // senarai nama untuk Kumpulan
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
@@ -96,14 +93,6 @@ export default function Page() {
 
   function set(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
-  }
-
-  function tambahGuru(nama) {
-    if (!nama) return;
-    setGuruList((list) => (list.includes(nama) ? list : [...list, nama]));
-  }
-  function buangGuru(nama) {
-    setGuruList((list) => list.filter((n) => n !== nama));
   }
 
   function openDateModal() {
@@ -165,11 +154,7 @@ export default function Page() {
   }
 
   function validate() {
-    if (mode === 'kumpulan') {
-      if (guruList.length < 2) return 'Mod Kumpulan perlu sekurang-kurangnya 2 guru.';
-    } else if (!form.guruNama) {
-      return 'Sila pilih nama guru.';
-    }
+    if (!form.guruNama) return 'Sila pilih nama guru.';
     if (!form.tarikhMula) return 'Sila pilih tarikh.';
     if (!form.sebab) return 'Sila pilih sebab ketidakhadiran.';
     if (separuh && !form.masaMula) return 'Sila pilih masa tidak hadir.';
@@ -189,7 +174,7 @@ export default function Page() {
     setSubmitting(true);
     try {
       const payload = {
-        ...(mode === 'kumpulan' ? { guruNamaList: guruList } : { guruNama: form.guruNama }),
+        guruNama: form.guruNama,
         tarikhMula: form.tarikhMula,
         tarikhTamat: form.tarikhTamat || form.tarikhMula,
         sebab: form.sebab,
@@ -208,8 +193,6 @@ export default function Page() {
 
   function resetForm() {
     setForm({ guruNama: '', tarikhMula: '', tarikhTamat: '', sebab: '', jenis: 'SEPANJANG_HARI', masaMula: '', masaTamat: '', catatan: '' });
-    setMode('individu');
-    setGuruList([]);
     setResult(null);
     setError('');
     setSubmitting(false);
@@ -241,110 +224,43 @@ export default function Page() {
                 <path d="M5 12.5l4.2 4.2L19 7" stroke="white" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </span>
-            <h1 className="doneTitle">Permohonan berjaya dihantar</h1>
-            {(result.jumlahRekodBerjaya ?? result.dicipta ?? 0) > 0 ? (
+            <h1 className="doneTitle">Permohonan diterima</h1>
+            {result.dicipta > 0 ? (
               <>
                 <p className="doneSub">
-                  {result.jumlahRekodBerjaya ?? result.dicipta} rekod berjaya direkodkan
+                  {result.mesej || `${result.dicipta} hari berjaya direkod.`} Sila simpan nombor rujukan sebagai bukti.
                 </p>
-                {((result.jumlahGuru ?? 1) > 1 || (result.jumlahHari ?? 1) > 1) && (
-                  <p className="doneMeta">
-                    ({result.jumlahGuru ?? 1} guru × {result.jumlahHari ?? 1} hari)
-                  </p>
-                )}
-                {(result.duplicateSkipped ?? result.dilangkau ?? 0) > 0 && (
-                  <p className="doneMeta">
-                    {result.duplicateSkipped ?? result.dilangkau} rekod dilangkau (sudah wujud sebelum ini).
-                  </p>
+                {result.references?.length === 1 ? (
+                  <div className="ref">{result.references[0]}</div>
+                ) : (
+                  <div className="refList">
+                    {result.references?.map((r) => (
+                      <span className="refItem" key={r}>{r}</span>
+                    ))}
+                  </div>
                 )}
               </>
             ) : (
-              <p className="doneSub">Semua rekod sudah direkod sebelum ini.</p>
+              <p className="doneSub">{result.mesej || 'Semua tarikh dalam julat sudah direkod sebelum ini.'}</p>
             )}
             <button className="btn ghost" onClick={resetForm}>Hantar borang lain</button>
           </div>
         ) : (
           <form onSubmit={handleSubmit} noValidate>
-            {/* Mod: Individu / Kumpulan */}
-            <label className="lbl">Mod ketidakhadiran</label>
-            <div className="seg" role="radiogroup" aria-label="Mod ketidakhadiran">
-              <button
-                type="button"
-                role="radio"
-                aria-checked={mode === 'individu'}
-                className={`segBtn ${mode === 'individu' ? 'on' : ''}`}
-                onClick={() => setMode('individu')}
-              >
-                Individu
-              </button>
-              <button
-                type="button"
-                role="radio"
-                aria-checked={mode === 'kumpulan'}
-                className={`segBtn ${mode === 'kumpulan' ? 'on' : ''}`}
-                onClick={() => setMode('kumpulan')}
-              >
-                Kumpulan
-              </button>
-            </div>
-
-            {mode === 'individu' ? (
-              <>
-                {/* Nama guru (individu) */}
-                <label className="lbl" htmlFor="guru">Nama guru</label>
-                <select
-                  id="guru"
-                  className="inp"
-                  value={form.guruNama}
-                  onChange={(e) => set('guruNama', e.target.value)}
-                  disabled={loadingOpts || !!optsError}
-                >
-                  <option value="">{loadingOpts ? 'Memuatkan…' : 'Pilih guru'}</option>
-                  {opts?.teachers?.map((t) => (
-                    <option key={t.id} value={t.nama}>{t.nama}</option>
-                  ))}
-                </select>
-              </>
-            ) : (
-              <>
-                {/* Nama guru (kumpulan — pilih ≥ 2) */}
-                <label className="lbl" htmlFor="guruAdd">Nama guru (pilih 2 atau lebih)</label>
-                <select
-                  id="guruAdd"
-                  className="inp"
-                  value=""
-                  onChange={(e) => tambahGuru(e.target.value)}
-                  disabled={loadingOpts || !!optsError}
-                >
-                  <option value="">{loadingOpts ? 'Memuatkan…' : 'Tambah guru…'}</option>
-                  {opts?.teachers
-                    ?.filter((t) => !guruList.includes(t.nama))
-                    .map((t) => (
-                      <option key={t.id} value={t.nama}>{t.nama}</option>
-                    ))}
-                </select>
-                {guruList.length > 0 && (
-                  <div className="chips">
-                    {guruList.map((nama) => (
-                      <span className="chip" key={nama}>
-                        {nama}
-                        <button
-                          type="button"
-                          className="chipX"
-                          onClick={() => buangGuru(nama)}
-                          aria-label={`Buang ${nama}`}
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <p className="hint">
-                  {guruList.length} guru dipilih{guruList.length < 2 ? ' — minimum 2 untuk Kumpulan' : ''}.
-                </p>
-              </>
-            )}
+            {/* Nama guru */}
+            <label className="lbl" htmlFor="guru">Nama guru</label>
+            <select
+              id="guru"
+              className="inp"
+              value={form.guruNama}
+              onChange={(e) => set('guruNama', e.target.value)}
+              disabled={loadingOpts || !!optsError}
+            >
+              <option value="">{loadingOpts ? 'Memuatkan…' : 'Pilih guru'}</option>
+              {opts?.teachers?.map((t) => (
+                <option key={t.id} value={t.nama}>{t.nama}</option>
+              ))}
+            </select>
             {optsError && <p className="hint err">{optsError}</p>}
 
             {/* Tarikh — field utama minimal + modal julat */}
@@ -655,41 +571,6 @@ export default function Page() {
           background: #0f766e;
           border-color: #0f766e;
         }
-        .chips {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-          margin-top: 10px;
-        }
-        .chip {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          padding: 6px 6px 6px 12px;
-          font-size: 13.5px;
-          font-weight: 600;
-          color: #0b5e57;
-          background: #e6f4f0;
-          border: 1px solid #c2e3da;
-          border-radius: 999px;
-        }
-        .chipX {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 20px;
-          height: 20px;
-          font-size: 16px;
-          line-height: 1;
-          color: #0b5e57;
-          background: rgba(11, 94, 87, 0.12);
-          border: none;
-          border-radius: 50%;
-          cursor: pointer;
-        }
-        .chipX:hover {
-          background: rgba(11, 94, 87, 0.22);
-        }
         .lampiran {
           display: flex;
           align-items: center;
@@ -770,18 +651,9 @@ export default function Page() {
           font-weight: 700;
         }
         .doneSub {
-          margin: 0 0 4px;
+          margin: 0 0 18px;
           font-size: 14px;
           color: #5b716a;
-        }
-        .doneMeta {
-          margin: 2px 0 0;
-          font-size: 13.5px;
-          font-weight: 600;
-          color: #5f7a72;
-        }
-        .done .btn {
-          margin-top: 18px;
         }
         .ref {
           font-size: 20px;

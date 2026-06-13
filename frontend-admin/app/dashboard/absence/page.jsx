@@ -139,6 +139,22 @@ export default function AbsenceDashboard() {
     }
   }
 
+  async function batalKumpulan() {
+    if (!selected || modalBusy || !selected.groupReference) return;
+    if (!confirm('Batalkan semua rekod dalam kumpulan ini?')) return;
+    setModalBusy(true);
+    setModalError('');
+    try {
+      await api.adminAbsence.cancelGroup(selected.groupReference);
+      setSelected(null);
+      await Promise.all([loadList(filters), loadSummary()]);
+    } catch (e) {
+      setModalError(e.message || 'Gagal membatalkan kumpulan');
+    } finally {
+      setModalBusy(false);
+    }
+  }
+
   // ── Telegram snapshot (Fasa 8) ──
   async function openTelegram() {
     const tarikh = filters.tarikh || todayKL();
@@ -240,7 +256,7 @@ export default function AbsenceDashboard() {
             <option value="">Semua guru</option>
             {opts.teachers.map((t) => <option key={t.id} value={t.nama}>{t.nama}</option>)}
           </select>
-          <input type="text" className="inp grow" placeholder="Cari nama / reference" value={filters.q} onChange={(e) => setF('q', e.target.value)} aria-label="Carian" />
+          <input type="text" className="inp grow" placeholder="Cari nama guru" value={filters.q} onChange={(e) => setF('q', e.target.value)} aria-label="Carian nama guru" />
           <button type="submit" className="btn">Tapis</button>
           <button type="button" className="btn ghost" onClick={reset}>Set semula</button>
         </form>
@@ -252,22 +268,24 @@ export default function AbsenceDashboard() {
           <table className="tbl">
             <thead>
               <tr>
-                <th>Reference</th><th>Tarikh</th><th>Hari</th><th>Nama Guru</th>
+                <th>Tarikh</th><th>Hari</th><th>Nama Guru</th>
                 <th>Sebab</th><th>Jenis</th><th>Masa Mula</th><th>Status</th><th>Tarikh Hantar</th><th></th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={10} className="empty">Memuatkan…</td></tr>
+                <tr><td colSpan={9} className="empty">Memuatkan…</td></tr>
               ) : records.length === 0 ? (
-                <tr><td colSpan={10} className="empty">Tiada rekod.</td></tr>
+                <tr><td colSpan={9} className="empty">Tiada rekod.</td></tr>
               ) : (
                 records.map((r) => (
                   <tr key={r.id}>
-                    <td className="mono">{r.reference || '-'}</td>
                     <td>{fmtDate(r.tarikh)}</td>
                     <td>{r.hari}</td>
-                    <td>{r.guruNama}</td>
+                    <td>
+                      {r.guruNama}
+                      {r.groupReference && <span className="badge grp">KUMPULAN</span>}
+                    </td>
                     <td>{sebabLabel(r.sebabKategori)}</td>
                     <td>{jenisLabel(r.jenis)}</td>
                     <td>{r.masaMula ? `${r.masaMula} – ${r.masaTamat || 'tamat'}` : '-'}</td>
@@ -298,6 +316,9 @@ export default function AbsenceDashboard() {
               <div><dt>Jenis</dt><dd>{jenisLabel(selected.jenis)}{selected.masaMula ? ` — ${selected.masaMula} hingga ${selected.masaTamat || 'tamat sekolah'}` : ''}</dd></div>
               <div><dt>Catatan</dt><dd>{selected.sebabDetail || '—'}</dd></div>
               <div><dt>Status</dt><dd><span className={`badge ${selected.statusBorang.toLowerCase()}`}>{STATUS_LABEL[selected.statusBorang]}</span></dd></div>
+              {selected.groupReference && (
+                <div><dt>Jenis rekod</dt><dd><span className="badge grp">KUMPULAN</span></dd></div>
+              )}
               <div><dt>Tarikh hantar</dt><dd>{fmtDateTime(selected.createdAt)}</dd></div>
             </dl>
 
@@ -316,6 +337,12 @@ export default function AbsenceDashboard() {
                 </button>
               ))}
             </div>
+
+            {selected.groupReference && (
+              <button className="btn warn full" disabled={modalBusy} onClick={batalKumpulan}>
+                Batal Kumpulan
+              </button>
+            )}
 
             {isSuper && (
               <button className="btn danger full" disabled={modalBusy} onClick={padam}>
@@ -390,6 +417,8 @@ export default function AbsenceDashboard() {
         .btn.ghost:hover { background: #e7eeec; }
         .btn.danger { color: #fff; background: #b42318; }
         .btn.danger:hover:not(:disabled) { background: #921a12; }
+        .btn.warn { color: #92400e; background: #fef6e7; border: 1px solid #f5e0b8; }
+        .btn.warn:hover:not(:disabled) { background: #fdeccb; }
         .btn.full { width: 100%; margin-top: 16px; }
         .alert { margin: 0 0 14px; padding: 10px 12px; font-size: 13px; color: #b42318; background: #fef3f2; border: 1px solid #fcd2cd; border-radius: 9px; }
         .tableWrap { overflow-x: auto; background: #fff; border: 1px solid #dce5e2; border-radius: 12px; }
@@ -405,6 +434,7 @@ export default function AbsenceDashboard() {
         .badge.aktif { color: #0b5e57; background: #e6f4f0; border: 1px solid #c2e3da; }
         .badge.dibatalkan { color: #b42318; background: #fef3f2; border: 1px solid #fcd2cd; }
         .badge.selesai { color: #1d4ed8; background: #eaf0fe; border: 1px solid #cdddfb; }
+        .badge.grp { margin-left: 8px; color: #8a6d12; background: #faf3df; border: 1px solid #ecdcae; font-size: 10.5px; letter-spacing: .03em; }
         .overlay { position: fixed; inset: 0; background: rgba(15,42,35,0.4); display: grid; place-items: center; padding: 16px; z-index: 50; }
         .modal { width: 100%; max-width: 440px; background: #fff; border-radius: 16px; padding: 20px; max-height: 88vh; overflow-y: auto; }
         .mHead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }

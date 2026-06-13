@@ -21,8 +21,7 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const createSchema = z
   .object({
-    guruNama: z.string().min(1).optional(),
-    guruNamaList: z.array(z.string().min(1)).optional(),
+    guruNama: z.string().min(1, 'Nama guru diperlukan'),
     tarikh: z.string().regex(DATE_RE, 'Tarikh tidak sah').optional(), // legacy (rekod lama / borang lama)
     tarikhMula: z.string().regex(DATE_RE, 'Tarikh mula tidak sah').optional(),
     tarikhTamat: z.string().regex(DATE_RE, 'Tarikh tamat tidak sah').optional(),
@@ -33,9 +32,6 @@ const createSchema = z
     catatan: z.string().optional(),
   })
   .superRefine((val, ctx) => {
-    if (!val.guruNama && !(val.guruNamaList && val.guruNamaList.length)) {
-      ctx.addIssue({ path: ['guruNama'], code: 'custom', message: 'Nama guru diperlukan' });
-    }
     if (!val.tarikhMula && !val.tarikh) {
       ctx.addIssue({ path: ['tarikhMula'], code: 'custom', message: 'Tarikh diperlukan' });
     }
@@ -93,7 +89,7 @@ export async function createAbsence(req, res) {
   }
 
   try {
-    const { guruNama, guruNamaList, sebab, jenis, masaMula, masaTamat, catatan } = parsed.data;
+    const { guruNama, sebab, jenis, masaMula, masaTamat, catatan } = parsed.data;
     const mulaStr = parsed.data.tarikhMula || parsed.data.tarikh;
     const tamatStr = parsed.data.tarikhTamat || mulaStr;
 
@@ -116,96 +112,60 @@ export async function createAbsence(req, res) {
       });
     }
 
-    // ── Senarai guru (kumpulan atau individu), nyahduplikat dalam penghantaran ──
-    const rawList = guruNamaList?.length ? guruNamaList : guruNama ? [guruNama] : [];
-    const namaList = [...new Set(rawList.map((n) => String(n).trim()).filter(Boolean))];
-    if (namaList.length === 0) {
-      return res.status(400).json({ success: false, mesej: 'Sila pilih sekurang-kurangnya seorang guru.' });
-    }
-
-    // Had selamat: jumlah rekod (guru × hari) setiap penghantaran
-    const MAX_REKOD = 300;
-    if (namaList.length * jumlahHari > MAX_REKOD) {
-      return res.status(400).json({
-        success: false,
-        mesej: `Terlalu banyak rekod (${namaList.length} guru × ${jumlahHari} hari). Maksimum ${MAX_REKOD} setiap penghantaran.`,
-      });
-    }
-
-    // Sahkan semua guru wujud & aktif
-    const guruRows = await prisma.teacher.findMany({ where: { nama: { in: namaList } } });
-    const guruMap = new Map(guruRows.filter((g) => g.isActive).map((g) => [g.nama, g]));
-    const tidakSah = namaList.filter((n) => !guruMap.has(n));
-    if (tidakSah.length) {
-      return res.status(400).json({ success: false, mesej: `Guru tidak wujud atau tidak aktif: ${tidakSah.join(', ')}` });
-    }
-
-    // ── Kumpulan (≥ 2 guru) → jana groupReference dikongsi semua rekod submit ini ──
-    let groupReference = null;
-    if (namaList.length >= 2) {
-      const prefix = `GRP-${mulaStr.replace(/-/g, '')}-`;
-      const existing = await prisma.absenceRecord.findMany({
-        where: { groupReference: { startsWith: prefix } },
-        select: { groupReference: true },
-        distinct: ['groupReference'],
-      });
-      groupReference = `${prefix}${String(existing.length + 1).padStart(3, '0')}`;
+    const guru = await prisma.teacher.findUnique({ where: { nama: guruNama.trim() } });
+    if (!guru || !guru.isActive) {
+      return res.status(400).json({ success: false, mesej: 'Guru tidak wujud atau tidak aktif' });
     }
 
     const references = []; // reference setiap rekod baharu
     const rekodBaharu = []; // untuk hook Telegram realtime
-    let dilangkau = 0; // (guru, tarikh) yang sudah ada rekod AKTIF
+    let dilangkau = 0; // tarikh yang sudah ada rekod AKTIF
 
-    // ── Untuk SETIAP guru × SETIAP tarikh → satu rekod ──
-    for (const nama of namaList) {
-      const guru = guruMap.get(nama);
-      for (let cur = startMs; cur <= endMs; cur += MS_HARI) {
-        const tarikhDate = new Date(cur);
-        const hari = hariDari(tarikhDate);
+    for (let cur = startMs; cur <= endMs; cur += MS_HARI) {
+      const tarikhDate = new Date(cur);
+      const hari = hariDari(tarikhDate);
 
-        // Dedup: guru sama + tarikh sama + masih AKTIF (belum dipadam) → langkau
-        const sediaAda = await prisma.absenceRecord.findFirst({
-          where: { guruNama: guru.nama, tarikh: tarikhDate, statusBorang: 'AKTIF', deletedAt: null },
-          select: { id: true },
-        });
-        if (sediaAda) {
-          dilangkau++;
-          continue;
-        }
-
-        // Jana reference + simpan dalam transaction; cuba semula sekali jika reference bertembung
-        let record;
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            record = await prisma.$transaction(async (tx) => {
-              const reference = await generateReference(tx, tarikhDate);
-              return tx.absenceRecord.create({
-                data: {
-                  guruNama: guru.nama,
-                  hari,
-                  tarikh: tarikhDate,
-                  sebabKategori: sebab,
-                  sebabDetail: catatan?.trim() || null,
-                  jenis,
-                  masaMula: jenis === 'SEPARUH_HARI' ? masaMula.trim() : null,
-                  masaTamat: jenis === 'SEPARUH_HARI' ? masaTamat?.trim() || null : null,
-                  statusBorang: 'AKTIF',
-                  submittedBy: guru.nama,
-                  reference,
-                  groupReference,
-                },
-              });
-            });
-            break;
-          } catch (e) {
-            if (e.code === 'P2002' && attempt === 0) continue; // konflik reference → cuba lagi
-            throw e;
-          }
-        }
-
-        references.push(record.reference);
-        rekodBaharu.push(record);
+      // Dedup: guru sama + tarikh sama + masih AKTIF (belum dipadam) → langkau
+      const sediaAda = await prisma.absenceRecord.findFirst({
+        where: { guruNama: guru.nama, tarikh: tarikhDate, statusBorang: 'AKTIF', deletedAt: null },
+        select: { id: true },
+      });
+      if (sediaAda) {
+        dilangkau++;
+        continue;
       }
+
+      // Jana reference + simpan dalam transaction; cuba semula sekali jika reference bertembung
+      let record;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          record = await prisma.$transaction(async (tx) => {
+            const reference = await generateReference(tx, tarikhDate);
+            return tx.absenceRecord.create({
+              data: {
+                guruNama: guru.nama,
+                hari,
+                tarikh: tarikhDate,
+                sebabKategori: sebab,
+                sebabDetail: catatan?.trim() || null,
+                jenis,
+                masaMula: jenis === 'SEPARUH_HARI' ? masaMula.trim() : null,
+                masaTamat: jenis === 'SEPARUH_HARI' ? masaTamat?.trim() || null : null,
+                statusBorang: 'AKTIF',
+                submittedBy: guru.nama,
+                reference,
+              },
+            });
+          });
+          break;
+        } catch (e) {
+          if (e.code === 'P2002' && attempt === 0) continue; // konflik reference → cuba lagi
+          throw e;
+        }
+      }
+
+      references.push(record.reference);
+      rekodBaharu.push(record);
     }
 
     // Satu audit ringkas untuk keseluruhan penghantaran
@@ -213,16 +173,7 @@ export async function createAbsence(req, res) {
       userId: null,
       action: 'ABSENCE_CREATE',
       entity: 'ABSENCE',
-      detail: {
-        guru: namaList.length === 1 ? namaList[0] : namaList,
-        tarikhMula: mulaStr,
-        tarikhTamat: tamatStr,
-        sebab,
-        jumlahGuru: namaList.length,
-        jumlahHari,
-        dicipta: references.length,
-        dilangkau,
-      },
+      detail: { guru: guru.nama, tarikhMula: mulaStr, tarikhTamat: tamatStr, sebab, dicipta: references.length, dilangkau },
       ip: getClientIp(req),
     });
 
@@ -238,22 +189,16 @@ export async function createAbsence(req, res) {
     const dicipta = references.length;
     return res.status(dicipta ? 201 : 200).json({
       success: true,
-      // ── Ringkasan kumpulan ──
-      jumlahGuru: namaList.length,
-      jumlahHari,
-      jumlahRekodBerjaya: dicipta,
-      duplicateSkipped: dilangkau,
-      groupReference,
-      // ── Serasi-belakang (borang sedia ada baca medan ini) ──
       dicipta,
       dilangkau,
+      jumlahHari,
       tarikhMula: mulaStr,
       tarikhTamat: tamatStr,
       references,
-      reference: references[0] || null,
+      reference: references[0] || null, // serasi ke belakang (borang lama baca medan ini)
       mesej: dicipta
-        ? `${dicipta} rekod berjaya (${namaList.length} guru × ${jumlahHari} hari)${dilangkau ? `, ${dilangkau} dilangkau (sudah wujud)` : ''}.`
-        : 'Semua rekod dalam penghantaran ini sudah wujud sebelum ini.',
+        ? `${dicipta} hari berjaya direkod${dilangkau ? `, ${dilangkau} hari dilangkau (sudah wujud)` : ''}.`
+        : 'Semua tarikh dalam julat sudah direkod sebelum ini.',
     });
   } catch (err) {
     res.status(500).json({ success: false, mesej: err.message });

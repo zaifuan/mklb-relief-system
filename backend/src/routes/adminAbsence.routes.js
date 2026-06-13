@@ -9,6 +9,7 @@ import {
   summary,
   getAbsence,
   updateStatus,
+  cancelGroup,
   removeAbsence,
 } from '../controllers/adminAbsence.controller.js';
 import { authenticate } from '../middleware/authenticate.js';
@@ -21,6 +22,7 @@ router.use(authenticate, authorize('SUPER_ADMIN', 'ADMIN_RELIEF'));
 
 router.get('/', listAbsence);
 router.get('/summary', summary); // sebelum /:id
+router.patch('/group/:groupReference/cancel', cancelGroup); // batal kumpulan (sebelum /:id)
 router.get('/:id', getAbsence);
 router.patch('/:id/status', updateStatus);
 

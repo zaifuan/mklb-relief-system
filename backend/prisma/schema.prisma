@@ -143,12 +143,14 @@ model AbsenceRecord {
   masaMula      String? // slot/jam mula bila SEPARUH_HARI
   masaTamat     String? // slot/jam tamat bila SEPARUH_HARI (null = "Tamat sekolah")
   reference     String?      @unique // ABS-YYYYMMDD-NNN
+  groupReference String? // GRP-YYYYMMDD-NNN — sama bagi semua rekod satu submit kumpulan (null = individu)
   deletedAt     DateTime? // soft delete (Padam oleh Super Admin)
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
   @@index([tarikh, statusBorang])
   @@index([guruNama, tarikh])
+  @@index([groupReference])
   @@map("absence_records")
 }
 
