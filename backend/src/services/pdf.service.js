@@ -66,8 +66,40 @@ function fmtMasaAmPm(masa) {
   return `${jamAmPm(clean.slice(0, i))} – ${jamAmPm(clean.slice(i + 1))}`;
 }
 
+// Masa mula DARI teks terformat ("8:10 AM – 8:40 AM") → minit mutlak (untuk sort).
+function startMinitFmt(masaFmt) {
+  const m = String(masaFmt || '').match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  if (!m) return 9999;
+  let h = parseInt(m[1], 10);
+  const mi = parseInt(m[2], 10);
+  const ap = m[3].toUpperCase();
+  if (ap === 'PM' && h !== 12) h += 12;
+  if (ap === 'AM' && h === 12) h = 0;
+  return h * 60 + mi;
+}
+
 // Stream PDF terus ke `res` (atau mana-mana writable stream).
-export function streamReliefPdf(res, { tarikhDate, hari, namaSekolah, baris, dijanaOleh, masaJana }) {
+export function streamReliefPdf(res, { tarikhDate, hari, namaSekolah, baris: barisInput, dijanaOleh, masaJana }) {
+  // ── Sorting LAST-MILE (sebelum pagination & render) ──
+  // Dilakukan di sini supaya PDF SENTIASA tersusun ikut nama guru tidak hadir
+  // A–Z → masa mula → kelas, tidak kira urutan data yang dihantar.
+  console.log(
+    '[pdf.service] PDF SORT CHECK (input):',
+    JSON.stringify((barisInput || []).map((b) => ({ guru: b.guruTakHadir, masa: b.masa, kelas: b.kelas })))
+  );
+  const baris = [...(barisInput || [])].sort((a, b) => {
+    const byNama = String(a.guruTakHadir || '').localeCompare(String(b.guruTakHadir || ''), 'ms');
+    if (byNama !== 0) return byNama;
+    const sa = startMinitFmt(a.masa);
+    const sb = startMinitFmt(b.masa);
+    if (sa !== sb) return sa - sb;
+    return String(a.kelas || '').localeCompare(String(b.kelas || ''), 'ms');
+  });
+  console.log(
+    '[pdf.service] PDF SORTED CHECK (selepas sort):',
+    JSON.stringify(baris.map((b, i) => ({ bil: i + 1, guru: b.guruTakHadir, masa: b.masa, kelas: b.kelas })))
+  );
+
   const doc = new PDFDocument({
     size: 'A4',
     layout: 'landscape',

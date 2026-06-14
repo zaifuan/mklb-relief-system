@@ -254,6 +254,12 @@ export async function reliefPdf(req, res) {
       guruGanti: a.guruGanti,
     }));
 
+    // DEBUG sementara — sahkan susunan baris masuk PDF (nama A–Z → masa → kelas)
+    console.log(
+      '[reliefPdf] SUSUNAN PDF =>',
+      baris.map((b, i) => `${i + 1}. ${b.guruTakHadir} | ${b.kelas} | ${b.masa}`).join('  ||  ')
+    );
+
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="jadual-ganti-${req.params.tarikh}.pdf"`);
 
