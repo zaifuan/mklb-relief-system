@@ -39,8 +39,9 @@ export default function AbsenceDashboard() {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [tarikh, setTarikh] = useState(todayKL());
 
-  const [filters, setFilters] = useState({ tarikh: '', status: 'AKTIF', sebab: '', guru: '', q: '' });
+  const filters = { tarikh, status: 'AKTIF', sebab: '', guru: '', q: '' };
 
   const [selected, setSelected] = useState(null);
   const [modalBusy, setModalBusy] = useState(false);
@@ -82,21 +83,12 @@ export default function AbsenceDashboard() {
     api.me().then((u) => setRole(u.role)).catch(() => {});
     api.publicOptions().then((o) => setOpts(o)).catch(() => {});
     loadSummary();
-    loadList({ status: 'AKTIF' });
-  }, [loadList, loadSummary]);
+  }, [loadSummary]);
 
-  function setF(k, v) {
-    setFilters((f) => ({ ...f, [k]: v }));
-  }
-  function tapis(e) {
-    e?.preventDefault();
-    loadList(filters);
-  }
-  function reset() {
-    const f = { tarikh: '', status: 'AKTIF', sebab: '', guru: '', q: '' };
-    setFilters(f);
-    loadList(f);
-  }
+  // Muat senarai untuk tarikh dipilih; muat semula bila tarikh bertukar.
+  useEffect(() => {
+    loadList({ tarikh, status: 'AKTIF' });
+  }, [tarikh, loadList]);
 
   async function openDetail(id) {
     setModalError('');
@@ -228,76 +220,69 @@ export default function AbsenceDashboard() {
           ))}
         </section>
 
-        {/* Telegram snapshot (Fasa 8) */}
-        <div className="tgbar">
-          <button type="button" className="btn ghost" onClick={openTelegram}>
-            Pratonton Snapshot Telegram
-          </button>
-          {isSuper && (
-            <button type="button" className="btn" onClick={openTelegram}>
-              Hantar Snapshot Telegram
+        {/* Senarai Guru Tidak Hadir (card utama) */}
+        <section className="listCard">
+          <div className="listHead">
+            <div className="listTitleWrap">
+              <h2 className="listTitle">Senarai Guru Tidak Hadir</h2>
+              <p className="listSub">Senarai ketidakhadiran guru untuk tarikh yang dipilih.</p>
+            </div>
+          </div>
+
+          <div className="listControls">
+            <label className="dateField">
+              <span className="dateLabel">Pilih Tarikh</span>
+              <input
+                type="date"
+                className="dateInput"
+                value={tarikh}
+                onChange={(e) => setTarikh(e.target.value || todayKL())}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn tgBtn"
+              onClick={openTelegram}
+              disabled={loading || tgLoading || records.length === 0}
+            >
+              <span aria-hidden="true">✈</span> Hantar Telegram
             </button>
-          )}
-          <span className="tgHint">Snapshot untuk {filters.tarikh ? fmtDate(filters.tarikh) : 'hari ini'}</span>
-        </div>
+          </div>
 
-        {/* Penapis */}
-        <form className="filters" onSubmit={tapis}>
-          <input type="date" className="inp" value={filters.tarikh} onChange={(e) => setF('tarikh', e.target.value)} aria-label="Tarikh" />
-          <select className="inp" value={filters.status} onChange={(e) => setF('status', e.target.value)} aria-label="Status">
-            <option value="">Semua status</option>
-            {STATUS_LIST.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
-          </select>
-          <select className="inp" value={filters.sebab} onChange={(e) => setF('sebab', e.target.value)} aria-label="Sebab">
-            <option value="">Semua sebab</option>
-            {opts.sebab.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-          </select>
-          <select className="inp" value={filters.guru} onChange={(e) => setF('guru', e.target.value)} aria-label="Guru">
-            <option value="">Semua guru</option>
-            {opts.teachers.map((t) => <option key={t.id} value={t.nama}>{t.nama}</option>)}
-          </select>
-          <input type="text" className="inp grow" placeholder="Cari nama guru" value={filters.q} onChange={(e) => setF('q', e.target.value)} aria-label="Carian nama guru" />
-          <button type="submit" className="btn">Tapis</button>
-          <button type="button" className="btn ghost" onClick={reset}>Set semula</button>
-        </form>
+          {error && <div className="alert" role="alert">{error}</div>}
 
-        {error && <div className="alert" role="alert">{error}</div>}
-
-        {/* Jadual */}
-        <div className="tableWrap">
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>Tarikh</th><th>Hari</th><th>Nama Guru</th>
-                <th>Sebab</th><th>Jenis</th><th>Masa Mula</th><th>Status</th><th>Tarikh Hantar</th><th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={9} className="empty">Memuatkan…</td></tr>
-              ) : records.length === 0 ? (
-                <tr><td colSpan={9} className="empty">Tiada rekod.</td></tr>
-              ) : (
-                records.map((r) => (
-                  <tr key={r.id}>
-                    <td>{fmtDate(r.tarikh)}</td>
-                    <td>{r.hari}</td>
-                    <td>
-                      {r.guruNama}
-                      {r.groupReference && <span className="badge grp">KUMPULAN</span>}
-                    </td>
-                    <td>{sebabLabel(r.sebabKategori)}</td>
-                    <td>{jenisLabel(r.jenis)}</td>
-                    <td>{r.masaMula ? `${r.masaMula} – ${r.masaTamat || 'tamat'}` : '-'}</td>
-                    <td><span className={`badge ${r.statusBorang.toLowerCase()}`}>{STATUS_LABEL[r.statusBorang]}</span></td>
-                    <td>{fmtDateTime(r.createdAt)}</td>
-                    <td><button className="link" onClick={() => openDetail(r.id)}>Urus</button></td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+          <div className="tableWrap">
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>Tarikh</th><th>Hari</th><th>Nama Guru</th>
+                  <th>Sebab</th><th>Status</th><th>Tindakan</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan={6} className="empty">Memuatkan…</td></tr>
+                ) : records.length === 0 ? (
+                  <tr><td colSpan={6} className="empty">Tiada rekod ketidakhadiran untuk tarikh ini.</td></tr>
+                ) : (
+                  records.map((r) => (
+                    <tr key={r.id}>
+                      <td>{fmtDate(r.tarikh)}</td>
+                      <td>{r.hari}</td>
+                      <td className="nameCell">
+                        {r.guruNama}
+                        {r.groupReference && <span className="badge grp">KUMPULAN</span>}
+                      </td>
+                      <td>{sebabLabel(r.sebabKategori)}</td>
+                      <td><span className={`badge ${r.statusBorang.toLowerCase()}`}>{STATUS_LABEL[r.statusBorang]}</span></td>
+                      <td><button className="link" onClick={() => openDetail(r.id)}>Urus</button></td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
       </main>
 
       {/* Modal butiran */}
@@ -422,9 +407,10 @@ export default function AbsenceDashboard() {
         .btn.full { width: 100%; margin-top: 16px; }
         .alert { margin: 0 0 14px; padding: 10px 12px; font-size: 13px; color: #b42318; background: #fef3f2; border: 1px solid #fcd2cd; border-radius: 9px; }
         .tableWrap { overflow-x: auto; background: #fff; border: 1px solid #dce5e2; border-radius: 12px; }
-        .tbl { width: 100%; border-collapse: collapse; min-width: 880px; font-size: 13.5px; }
+        .tbl { width: 100%; border-collapse: collapse; min-width: 560px; font-size: 13.5px; }
         .tbl th { text-align: left; padding: 11px 12px; background: #f1f5f4; color: #3b544c; font-weight: 600; border-bottom: 1px solid #dce5e2; white-space: nowrap; }
         .tbl td { padding: 11px 12px; border-bottom: 1px solid #eef2f0; color: #233a33; white-space: nowrap; }
+        .tbl td.nameCell { white-space: normal; min-width: 150px; }
         .tbl tr:last-child td { border-bottom: none; }
         .mono { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
         .empty { text-align: center; color: #80958e; padding: 28px 0; }
@@ -449,15 +435,31 @@ export default function AbsenceDashboard() {
         .sBtn { padding: 9px 8px; font-size: 13px; font-weight: 600; color: #3b544c; background: #f1f5f4; border: 1px solid #d3ded9; border-radius: 9px; cursor: pointer; }
         .sBtn.on { color: #fff; background: #0f766e; border-color: #0f766e; }
         .sBtn:disabled { cursor: default; }
-        .tgbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
-        .tgHint { font-size: 12.5px; color: #5b716a; }
         .tgMeta { margin: 0 0 10px; font-size: 13px; color: #5b716a; }
         .tgMuted { color: #80958e; font-size: 14px; padding: 8px 0; }
         .tgText { margin: 0 0 12px; padding: 12px 14px; background: #f1f5f4; border: 1px solid #dce5e2; border-radius: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; line-height: 1.55; color: #233a33; white-space: pre-wrap; word-break: break-word; max-height: 48vh; overflow-y: auto; }
         .tgNote { margin: 0 0 12px; padding: 10px 12px; font-size: 13px; color: #0b5e57; background: #e6f4f0; border: 1px solid #c2e3da; border-radius: 9px; }
         .tgActions { display: flex; justify-content: flex-end; gap: 8px; }
+
+        .listCard { background: #fff; border: 1px solid #dce5e2; border-radius: 12px; padding: 16px 16px 6px; margin-bottom: 18px; }
+        .listHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+        .listTitleWrap { min-width: 0; }
+        .listTitle { margin: 0; font-size: 16px; font-weight: 700; color: #0f766e; }
+        .listSub { margin: 4px 0 0; font-size: 12.5px; color: #5b716a; }
+        .tgBtn { width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 7px; white-space: nowrap; }
+        .tgBtn:disabled { opacity: .5; cursor: not-allowed; }
+        .listControls { display: flex; flex-direction: column; gap: 12px; padding: 14px 0 16px; border-bottom: 1px solid #eef2f0; }
+        .dateField { display: flex; flex-direction: column; gap: 6px; }
+        .dateLabel { font-size: 13px; font-weight: 600; color: #14302b; }
+        .dateInput { width: 100%; padding: 11px 12px; border: 1px solid #cfe0db; border-radius: 10px; font-size: 15px; color: #14302b; background: #fff; }
+        .dateInput:focus { outline: none; border-color: #0f766e; }
+        .listCard .alert { margin: 14px 0 0; }
+        .listCard .tableWrap { border: none; border-radius: 0; background: transparent; margin-top: 6px; }
+
         @media (max-width: 640px) {
           .cards { grid-template-columns: repeat(2, 1fr); }
+          .listHead { flex-wrap: wrap; }
+          .tgBtn { width: 100%; justify-content: center; }
         }
       `}</style>
     </div>

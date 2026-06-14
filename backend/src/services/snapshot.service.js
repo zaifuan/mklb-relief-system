@@ -118,7 +118,8 @@ export async function buildSnapshot({
     orderBy: { createdAt: 'asc' }, // susun ikut masa hantar
   });
 
-  const mc = []; // { nama, kat }
+  const mc = []; // { nama, kat } — untuk path pembatalan (format lama, digabung)
+  const byKat = { MC: [], CRK: [], CTR: [] }; // untuk format baharu (berasingan)
   const progSekolah = []; // { nama, jenis, masaMula, masaTamat, catatan }
   const progLuar = [];
   const lainLain = [];
@@ -131,6 +132,7 @@ export async function buildSnapshot({
 
     if (MC_KATEGORI.includes(kat)) {
       if (!mc.some((x) => x.nama === nama && x.kat === kat)) mc.push({ nama, kat });
+      if (!byKat[kat].includes(nama)) byKat[kat].push(nama);
     } else {
       const item = { nama, jenis: r.jenis, masaMula: r.masaMula, masaTamat: r.masaTamat, catatan };
       if (kat === 'PROGRAM_SEKOLAH') progSekolah.push(item);
@@ -151,26 +153,59 @@ export async function buildSnapshot({
     return { text: m, jumlahGuru: 0, hari, adaRekod: false };
   }
 
-  // ── Bina teks ──
-  let msg = '';
-  if (pembatalan) msg += '⚠️ PEMBATALAN KETIDAKHADIRAN\n\n';
+  // ════════════════════════════════════════════════════════
+  //  PEMBATALAN — format LAMA, TIDAK diubah (kekal seperti asal).
+  // ════════════════════════════════════════════════════════
+  if (pembatalan) {
+    let msg = '⚠️ PEMBATALAN KETIDAKHADIRAN\n\n';
+    msg += 'KEMASKINI KETIDAKHADIRAN GURU\n\n';
+    msg += 'Tarikh: ' + tarikhDisplay(tarikh) + '\n';
+    msg += 'Hari: ' + String(hari || '').toUpperCase();
 
-  const header = isAutoSnapshot ? 'KETIDAKHADIRAN GURU' : 'KEMASKINI KETIDAKHADIRAN GURU';
-  msg += header + '\n\n';
-  msg += 'Tarikh: ' + tarikhDisplay(tarikh) + '\n';
-  msg += 'Hari: ' + String(hari || '').toUpperCase();
+    const sections = [];
+    if (mc.length) sections.push(['MC / CRK / CTR', mc.map((x) => `• ${x.nama} - ${x.kat}`).join('\n')]);
+    if (progSekolah.length) sections.push(['PROGRAM DI SEKOLAH', renderKumpulan(progSekolah)]);
+    if (progLuar.length) sections.push(['PROGRAM DI LUAR SEKOLAH', renderKumpulan(progLuar)]);
+    if (lainLain.length) sections.push(['LAIN-LAIN', renderKumpulan(lainLain)]);
 
-  const sections = [];
-  if (mc.length) sections.push(['MC / CRK / CTR', mc.map((x) => `• ${x.nama} - ${x.kat}`).join('\n')]);
-  if (progSekolah.length) sections.push(['PROGRAM DI SEKOLAH', renderKumpulan(progSekolah)]);
-  if (progLuar.length) sections.push(['PROGRAM DI LUAR SEKOLAH', renderKumpulan(progLuar)]);
-  if (lainLain.length) sections.push(['LAIN-LAIN', renderKumpulan(lainLain)]);
-
-  for (const [label, body] of sections) {
-    msg += `\n\n\n${label}\n\n${body}`;
+    for (const [label, body] of sections) {
+      msg += `\n\n\n${label}\n\n${body}`;
+    }
+    msg += '\n\nKemaskini terakhir: ' + masaSekarangKL();
+    return { text: msg, jumlahGuru: jumlah, hari, adaRekod: true };
   }
 
-  msg += '\n\nKemaskini terakhir: ' + (isAutoSnapshot ? autoLabel : masaSekarangKL());
+  // ════════════════════════════════════════════════════════
+  //  FORMAT BAHARU (ringkas) — snapshot biasa/auto/realtime.
+  //    • Header sentiasa "KEMASKINI KETIDAKHADIRAN GURU".
+  //    • MC / CRK / CTR berasingan, nama bernombor (tiada catatan).
+  //    • Program/Lain-lain: nama bernombor + catatan di baris bawah ("- ..").
+  //    • Tiada masa/tempoh. Satu baris kosong antara blok.
+  // ════════════════════════════════════════════════════════
+  const blocks = ['KEMASKINI KETIDAKHADIRAN GURU'];
+  blocks.push('Tarikh: ' + tarikhDisplay(tarikh));
+  blocks.push('Hari: ' + String(hari || '').toUpperCase());
 
-  return { text: msg, jumlahGuru: jumlah, hari, adaRekod: true };
+  // MC, CRK, CTR — setiap satu tajuk sendiri, nama bernombor rapat
+  for (const kat of MC_KATEGORI) {
+    const namaList = byKat[kat];
+    if (!namaList.length) continue;
+    blocks.push(kat + '\n\n' + namaList.map((n, i) => `${i + 1}. ${n}`).join('\n'));
+  }
+
+  // Program/Lain-lain — nama bernombor + catatan ("- ..") di bawah
+  const kumpulanBaharu = (label, arr) => {
+    if (!arr.length) return;
+    const body = arr
+      .map((e, i) => (e.catatan ? `${i + 1}. ${e.nama}\n\n- ${e.catatan}` : `${i + 1}. ${e.nama}`))
+      .join('\n\n');
+    blocks.push(label + '\n\n' + body);
+  };
+  kumpulanBaharu('PROGRAM DI SEKOLAH', progSekolah);
+  kumpulanBaharu('PROGRAM DI LUAR SEKOLAH', progLuar);
+  kumpulanBaharu('LAIN-LAIN', lainLain);
+
+  blocks.push('Kemaskini terakhir: ' + (isAutoSnapshot ? autoLabel : masaSekarangKL()));
+
+  return { text: blocks.join('\n\n'), jumlahGuru: jumlah, hari, adaRekod: true };
 }
