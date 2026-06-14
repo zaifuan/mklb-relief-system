@@ -35,6 +35,19 @@ function susunIkutMasa(rows) {
   });
 }
 
+// Susun ikut nama guru tidak hadir A–Z → masa mula → kelas
+// (SAMA seperti paparan dashboard relief supaya PDF padan dengan pratonton)
+function susunIkutNama(rows) {
+  return [...rows].sort((a, b) => {
+    const byNama = String(a.guruTakHadir).localeCompare(String(b.guruTakHadir), 'ms');
+    if (byNama !== 0) return byNama;
+    const sa = parseMasa(a.masa)[0] ?? 9999;
+    const sb = parseMasa(b.masa)[0] ?? 9999;
+    if (sa !== sb) return sa - sb;
+    return String(a.kelas).localeCompare(String(b.kelas), 'ms');
+  });
+}
+
 // ── POST /api/relief/generate ─────────────────────────────
 export async function generateRelief(req, res) {
   const parsed = bodySchema.safeParse(req.body);
@@ -233,7 +246,7 @@ export async function reliefPdf(req, res) {
     });
     if (!batch) return res.status(404).json({ mesej: 'Tiada batch relief untuk tarikh ini.' });
 
-    const baris = susunIkutMasa(batch.assignments).map((a) => ({
+    const baris = susunIkutNama(batch.assignments).map((a) => ({
       guruTakHadir: a.guruTakHadir,
       kelas: a.kelas,
       subjek: a.subjek || '-',
