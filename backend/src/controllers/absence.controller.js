@@ -15,6 +15,7 @@ import {
 } from '../lib/absenceConstants.js';
 import { hariDari, generateReference } from '../lib/absenceUtil.js';
 import { masaKeMinitAuto } from '../lib/absenceWindow.js';
+import { normalkanMasa } from '../lib/timeUtil.js';
 import { sendRealtime, sendPembatalan } from '../services/telegramNotify.service.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -31,6 +32,19 @@ const createSchema = z
     masaMula: z.string().optional(),
     masaTamat: z.string().optional(),
     catatan: z.string().optional(),
+    // Pertukaran Kelas (Suka Sama Suka) — hanya diproses untuk hantar SATU guru × SATU hari.
+    pertukaran: z
+      .array(
+        z.object({
+          scheduleId: z.number().int().optional(),
+          slot: z.string().optional(),
+          kelas: z.string().min(1),
+          masa: z.string().min(1),
+          subjek: z.string().optional(),
+          guruGanti: z.string().min(1),
+        })
+      )
+      .optional(),
   })
   .superRefine((val, ctx) => {
     if (!val.guruNama && !(val.guruNamaList && val.guruNamaList.length)) {
@@ -78,6 +92,44 @@ export async function getPublicOptions(req, res) {
     });
   } catch (err) {
     res.status(500).json({ mesej: err.message });
+  }
+}
+
+// GET /api/absence/public/schedule?guruNama=...&tarikh=YYYY-MM-DD  (awam)
+// Pulangkan slot MENGAJAR guru pada hari tarikh tersebut — untuk pilih kelas
+// yang ingin diserahkan (Pertukaran Kelas / Suka Sama Suka). Slot FREE dibuang.
+export async function getPublicSchedule(req, res) {
+  try {
+    const guruNama = String(req.query.guruNama || '').trim();
+    const tarikhStr = String(req.query.tarikh || '').trim();
+    if (!guruNama) return res.status(400).json({ success: false, mesej: 'Nama guru diperlukan' });
+    if (!DATE_RE.test(tarikhStr)) return res.status(400).json({ success: false, mesej: 'Tarikh tidak sah' });
+
+    const [y, m, d] = tarikhStr.split('-').map(Number);
+    const tarikhDate = new Date(Date.UTC(y, m - 1, d));
+    const hari = hariDari(tarikhDate).toUpperCase();
+
+    const rows = await prisma.teacherSchedule.findMany({
+      where: { hari, guru: { equals: guruNama, mode: 'insensitive' } },
+      select: { id: true, slot: true, kelas: true, masa: true, subjek: true },
+    });
+
+    const isFree = (k) => String(k || '').trim().toUpperCase() === 'FREE';
+    const startMin = (masa) => masaKeMinitAuto(String(masa || '').split('-')[0]) ?? 9999;
+    const slots = rows
+      .filter((r) => r.kelas && !isFree(r.kelas))
+      .map((r) => ({
+        scheduleId: r.id,
+        slot: r.slot || null,
+        kelas: String(r.kelas).trim(),
+        masa: String(r.masa || '').trim(),
+        subjek: r.subjek ? String(r.subjek).trim() : null,
+      }))
+      .sort((a, b) => startMin(a.masa) - startMin(b.masa));
+
+    res.json({ success: true, hari, slots, jumlah: slots.length });
+  } catch (err) {
+    res.status(500).json({ success: false, mesej: err.message });
   }
 }
 
@@ -156,6 +208,25 @@ export async function createAbsence(req, res) {
     const rekodBaharu = []; // untuk hook Telegram realtime
     let dilangkau = 0; // (guru, tarikh) yang sudah ada rekod AKTIF
 
+    // ── Pertukaran Kelas (Suka Sama Suka) — disediakan untuk simpanan ATOMIK ──
+    // Hanya untuk hantar SATU guru × SATU hari (selaras UI borang). Resolusi ID
+    // guru ganti dibuat sekali di sini; baris class_swaps dicipta DALAM transaksi
+    // yang SAMA dengan absenceRecord supaya kedua-duanya atomik (semua-atau-tiada).
+    const wantSwaps = !!(parsed.data.pertukaran?.length && namaList.length === 1 && jumlahHari === 1);
+    let gantiIdMap = new Map();
+    let swapInput = [];
+    if (wantSwaps) {
+      swapInput = parsed.data.pertukaran.filter((p) => p.guruGanti && p.kelas && p.masa);
+      const namaGanti = [...new Set(swapInput.map((p) => String(p.guruGanti).trim()).filter(Boolean))];
+      if (namaGanti.length) {
+        const gantiRows = await prisma.teacher.findMany({
+          where: { nama: { in: namaGanti } },
+          select: { id: true, nama: true },
+        });
+        gantiIdMap = new Map(gantiRows.map((g) => [g.nama, g.id]));
+      }
+    }
+
     // ── Untuk SETIAP guru × SETIAP tarikh → satu rekod ──
     for (const nama of namaList) {
       const guru = guruMap.get(nama);
@@ -173,13 +244,14 @@ export async function createAbsence(req, res) {
           continue;
         }
 
-        // Jana reference + simpan dalam transaction; cuba semula sekali jika reference bertembung
+        // Jana reference + simpan dalam transaction; cuba semula sekali jika reference bertembung.
+        // Pertukaran kelas dicipta DALAM transaksi yang SAMA → atomik dengan rekod.
         let record;
         for (let attempt = 0; attempt < 2; attempt++) {
           try {
             record = await prisma.$transaction(async (tx) => {
               const reference = await generateReference(tx, tarikhDate);
-              return tx.absenceRecord.create({
+              const rec = await tx.absenceRecord.create({
                 data: {
                   guruNama: guru.nama,
                   hari,
@@ -195,6 +267,28 @@ export async function createAbsence(req, res) {
                   groupReference,
                 },
               });
+
+              // Pertukaran kelas — ATOMIK (rollback bersama rekod jika gagal).
+              if (wantSwaps && swapInput.length) {
+                await tx.classSwap.createMany({
+                  data: swapInput.map((p) => ({
+                    absenceRecordId: rec.id,
+                    guruAsal: rec.guruNama,
+                    guruGanti: String(p.guruGanti).trim(),
+                    teacherIdAsal: guru.id ?? null,
+                    teacherIdGanti: gantiIdMap.get(String(p.guruGanti).trim()) ?? null,
+                    scheduleId: p.scheduleId ?? null,
+                    slot: p.slot ?? null,
+                    hari: rec.hari,
+                    tarikh: rec.tarikh,
+                    kelas: String(p.kelas).trim(),
+                    masa: normalkanMasa(p.masa), // normalisasi konsisten (sama spt enjin)
+                    subjek: p.subjek ? String(p.subjek).trim() : null,
+                    catatan: null,
+                  })),
+                });
+              }
+              return rec;
             });
             break;
           } catch (e) {

@@ -19,7 +19,7 @@ import prisma from '../lib/prisma.js';
 import { hariDari } from '../lib/absenceUtil.js';
 import { loadReliefConfig } from '../lib/reliefConfig.js';
 import { cariBestCalon } from './candidate.service.js';
-import { parseMasa, masaBertindih } from '../lib/timeUtil.js';
+import { parseMasa, masaBertindih, normalkanMasa } from '../lib/timeUtil.js';
 import { julatTidakHadir, slotDalamJulat, masaKeMinitAuto } from '../lib/absenceWindow.js';
 
 const norm = (s) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
@@ -52,7 +52,7 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
   const hUpper = hari.toUpperCase();
 
   // ── Muat semua data sekali gus ──
-  const [jadualRows, absentAll, teachers, exclusions, config, existingBatch, specialSettings] = await Promise.all([
+  const [jadualRows, absentAll, teachers, exclusions, config, existingBatch, specialSettings, classSwaps] = await Promise.all([
     prisma.teacherSchedule.findMany({ where: { hari: hUpper } }),
     prisma.absenceRecord.findMany({
       where: { tarikh: tarikhDate, statusBorang: 'AKTIF', deletedAt: null },
@@ -63,6 +63,12 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
     loadReliefConfig(),
     prisma.reliefBatch.findUnique({ where: { tarikh: tarikhDate }, include: { assignments: true } }),
     prisma.dailySpecialSetting.findMany({ where: { tarikh: tarikhDate } }),
+    // Hanya pertukaran yang terikat pada ketidakhadiran AKTIF (bukan dibatalkan/
+    // dipadam) layak melangkau slot. Selaras penapis dashboard & PDF — sumber
+    // kebenaran tunggal ialah status rekod ketidakhadiran.
+    prisma.classSwap.findMany({
+      where: { tarikh: tarikhDate, absenceRecord: { statusBorang: 'AKTIF', deletedAt: null } },
+    }),
   ]);
 
   // Halang jana semula jika sudah DIHANTAR / SELESAI (keputusan #4)
@@ -153,6 +159,22 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
   // (Tiada konsep "kekalkan DISAHKAN" — baris lama telah dibuang oleh simpanReliefBatch.)
   const gantiGlobal = {};
 
+  // ── Pertukaran Kelas (Suka Sama Suka) — slot ini diambil alih guru lain
+  //    secara persetujuan; ia BUKAN relief dan TIDAK perlu dijana relief.
+  //    Bina set kunci (guru tidak hadir || kelas || masa) untuk dilangkau.
+  //    Sistem berasaskan nama: padanan ikut norm(guruAsal) + kelas + masa
+  //    (sama format seperti slot dalam jadualData).
+  const swapSkip = new Set();
+  for (const sw of classSwaps) {
+    swapSkip.add(`${norm(sw.guruAsal)}||${String(sw.kelas || '').trim()}||${normalkanMasa(sw.masa)}`);
+  }
+
+  // Guru yang MENGAMBIL ALIH kelas (Suka Sama Suka) — sedang sibuk dengan kelas
+  // yang diserahkan, jadi dikecualikan daripada SEMUA calon relief automatik pada
+  // tarikh ini (sepanjang hari). classSwaps di atas sudah ditapis kepada
+  // ketidakhadiran AKTIF sahaja → jika absence dibatalkan, guru ini kembali layak.
+  const swapBuyers = new Set(classSwaps.map((sw) => norm(sw.guruGanti)));
+
   // ── Senarai guru tak hadir yang perlu ganti (layan sebagai SEMUA) ──
   const guruPerluGanti = absentAll.filter((a) => a.perluGanti === true);
 
@@ -166,7 +188,8 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
         return { kelas: r.kelas, masa: r.masa, subjek: r.subjek, mula, tamat };
       })
       .filter((s) => s.mula !== null)
-      .filter((s) => !kelasKecualiPadaSlot(s.kelas, s.mula, s.tamat)); // CLASS_EXCLUSION (peka masa)
+      .filter((s) => !kelasKecualiPadaSlot(s.kelas, s.mula, s.tamat)) // CLASS_EXCLUSION (peka masa)
+      .filter((s) => !swapSkip.has(`${n}||${s.kelas}||${normalkanMasa(s.masa)}`)); // Pertukaran kelas → langkau (BUKAN relief)
 
     // SEPARUH_HARI → hanya slot yang BERTINDIH julat tidak hadir
     //   [masaMula, masaTamat || hujung hari]. Slot di luar julat: guru hadir,
@@ -223,6 +246,7 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
       hadSlotOverride: 1,
       pengecualianList,
       guruKecualiList,
+      swapBuyers,
       config,
     });
     const pilihan = calon[0] || null;
@@ -272,6 +296,7 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
         hadSlotOverride: null, // benarkan Tier 2
         pengecualianList,
         guruKecualiList,
+        swapBuyers,
         config,
       });
       const pP2 = calonP2[0] || null;
@@ -319,7 +344,7 @@ export async function senaraiCalonSemua(tarikhDate) {
   if (!tarikhDate) return {};
   const hUpper = hariDari(tarikhDate).toUpperCase();
 
-  const [jadualRows, absentAll, teachers, exclusions, config, batch, specialSettings] = await Promise.all([
+  const [jadualRows, absentAll, teachers, exclusions, config, batch, specialSettings, classSwaps] = await Promise.all([
     prisma.teacherSchedule.findMany({ where: { hari: hUpper } }),
     prisma.absenceRecord.findMany({ where: { tarikh: tarikhDate, statusBorang: 'AKTIF', deletedAt: null } }),
     prisma.teacher.findMany(),
@@ -327,6 +352,9 @@ export async function senaraiCalonSemua(tarikhDate) {
     loadReliefConfig(),
     prisma.reliefBatch.findUnique({ where: { tarikh: tarikhDate }, include: { assignments: true } }),
     prisma.dailySpecialSetting.findMany({ where: { tarikh: tarikhDate } }),
+    prisma.classSwap.findMany({
+      where: { tarikh: tarikhDate, absenceRecord: { statusBorang: 'AKTIF', deletedAt: null } },
+    }),
   ]);
   if (!batch) return {};
 
@@ -390,6 +418,10 @@ export async function senaraiCalonSemua(tarikhDate) {
     bebanFlat.push({ nama: norm(a.guruGanti), kelas: a.kelas, masa: a.masa, fromId: a.id });
   }
 
+  // Guru yang MENGAMBIL ALIH kelas (Suka Sama Suka) pada tarikh ini — sibuk
+  // sepanjang hari, jadi dikecualikan daripada senarai calon (selaras enjin auto).
+  const swapBuyers = new Set(classSwaps.map((sw) => norm(sw.guruGanti)));
+
   const hasil = {};
   for (const a of batch.assignments) {
     if (a.status === 'BATAL') {
@@ -424,6 +456,7 @@ export async function senaraiCalonSemua(tarikhDate) {
       hadSlotOverride: null, // senarai seluas mungkin (Tier 1, atau Tier 2 jika perlu)
       pengecualianList,
       guruKecualiList,
+      swapBuyers,
       config,
     });
 

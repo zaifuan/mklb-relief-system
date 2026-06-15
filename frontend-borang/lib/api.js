@@ -26,6 +26,8 @@ async function request(path, { method = 'GET', body } = {}) {
 
 export const api = {
   options: () => request('/api/absence/public/options'),
+  schedule: (guruNama, tarikh) =>
+    request(`/api/absence/public/schedule?guruNama=${encodeURIComponent(guruNama)}&tarikh=${encodeURIComponent(tarikh)}`),
   submit: (payload) => request('/api/absence', { method: 'POST', body: payload }),
   check: (guruNama, tarikh) =>
     request(`/api/absence/public/check?guruNama=${encodeURIComponent(guruNama)}&tarikh=${encodeURIComponent(tarikh)}`),

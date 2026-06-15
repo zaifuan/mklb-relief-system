@@ -134,12 +134,47 @@ export async function getReliefByTarikh(req, res) {
   if (!tarikhDate) return res.status(400).json({ mesej: 'Tarikh perlu format YYYY-MM-DD' });
 
   try {
-    const batch = await prisma.reliefBatch.findUnique({
-      where: { tarikh: tarikhDate },
-      include: { assignments: true },
-    });
+    const [batch, swapRows] = await Promise.all([
+      prisma.reliefBatch.findUnique({ where: { tarikh: tarikhDate }, include: { assignments: true } }),
+      prisma.classSwap.findMany({
+        where: { tarikh: tarikhDate },
+        orderBy: { id: 'asc' },
+        include: { absenceRecord: { select: { statusBorang: true, deletedAt: true } } },
+      }),
+    ]);
+
+    // Pertukaran kelas aktif (rekod ketidakhadiran masih AKTIF, atau tiada pautan)
+    const swaps = swapRows
+      .filter((s) => !s.absenceRecord || (s.absenceRecord.statusBorang === 'AKTIF' && !s.absenceRecord.deletedAt))
+      .map((s) => ({
+        id: s.id,
+        slot: s.slot,
+        kelas: s.kelas,
+        masa: s.masa,
+        subjek: s.subjek,
+        hari: s.hari,
+        guruAsal: s.guruAsal,
+        guruGanti: s.guruGanti,
+      }));
 
     if (!batch) {
+      // Tiada batch relief. Jika ada pertukaran kelas, tetap pulangkan supaya
+      // dashboard boleh memaparkannya. Jika tiada kedua-duanya → 404 (kekal).
+      if (swaps.length) {
+        return res.json({
+          tarikh: req.params.tarikh,
+          status: null,
+          generatedBy: null,
+          generatedAt: null,
+          confirmedBy: null,
+          confirmedAt: null,
+          jumlah: 0,
+          ringkasan: { slot: 0, terisi: 0, kosong: 0, tier2: 0 },
+          assignments: [],
+          swaps,
+          jumlahPertukaran: swaps.length,
+        });
+      }
       return res.status(404).json({ mesej: 'Tiada batch relief untuk tarikh ini.', tarikh: req.params.tarikh });
     }
 
@@ -185,6 +220,8 @@ export async function getReliefByTarikh(req, res) {
         tier2: assignments.filter((a) => a.isTier2).length,
       },
       assignments,
+      swaps,
+      jumlahPertukaran: swaps.length,
     });
   } catch (err) {
     console.error('getReliefByTarikh ERROR:', err);
@@ -260,6 +297,29 @@ export async function reliefPdf(req, res) {
       baris.map((b, i) => `${i + 1}. ${b.guruTakHadir} | ${b.kelas} | ${b.masa}`).join('  ||  ')
     );
 
+    // ── Pertukaran Kelas (Suka Sama Suka) untuk seksyen PDF tambahan ──
+    const swapRows = await prisma.classSwap.findMany({
+      where: { tarikh: tarikhDate },
+      orderBy: { id: 'asc' },
+      include: { absenceRecord: { select: { statusBorang: true, deletedAt: true } } },
+    });
+    const pertukaran = swapRows
+      .filter((s) => !s.absenceRecord || (s.absenceRecord.statusBorang === 'AKTIF' && !s.absenceRecord.deletedAt))
+      .map((s) => ({
+        slot: s.slot || '-',
+        kelas: s.kelas,
+        subjek: s.subjek || '-',
+        masa: fmtMasaJulat(s.masa),
+        guruAsal: s.guruAsal,
+        guruGanti: s.guruGanti,
+      }))
+      .sort((a, b) => {
+        const ma = parseMasa(a.masa)[0] ?? 9999;
+        const mb = parseMasa(b.masa)[0] ?? 9999;
+        if (ma !== mb) return ma - mb;
+        return String(a.kelas).localeCompare(String(b.kelas), 'ms');
+      });
+
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="jadual-ganti-${req.params.tarikh}.pdf"`);
 
@@ -276,6 +336,7 @@ export async function reliefPdf(req, res) {
       hari: hariDari(tarikhDate).toUpperCase(),
       namaSekolah: 'SABK MAAHAD AL KHAIR LIL BANAT',
       baris,
+      pertukaran,
       dijanaOleh: batch.generatedBy,
       masaJana: batch.generatedAt,
     });

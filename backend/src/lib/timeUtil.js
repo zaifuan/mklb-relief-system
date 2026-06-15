@@ -54,6 +54,21 @@ export function parseMasa(masa) {
   }
 }
 
+// ── NORMALKAN MASA (untuk PADANAN SLOT yang konsisten) ────
+// Hasilkan bentuk kanonik rentetan masa supaya padanan slot pertukaran kelas
+// kekal sepadan walaupun format berbeza sedikit antara simpan & jana relief
+// (cth selepas re-sync Google Sheet). Diguna SAMA di kedua-dua tempat:
+// semasa simpan class_swaps DAN semasa matching dalam enjin relief.
+//   "8.40 – 9.10"  → "8.40-9.10"   (en/em dash → hyphen)
+//   "8:40-9:10"    → "8.40-9.10"   (":" → ".")
+//   " 8.40 - 9.10 "→ "8.40-9.10"   (buang ruang)
+export function normalkanMasa(masa) {
+  return String(masa || '')
+    .replace(/[–—]/g, '-') // en/em dash → dash biasa
+    .replace(/:/g, '.') // ":" → "." (seragam format sekolah)
+    .replace(/\s+/g, ''); // buang semua ruang
+}
+
 // ── PARSE KELAS ───────────────────────────────────────────
 // "4A (9.10-10.10), 4B (11.00-12.00)" → [{ kelas, masa }, ...]
 // "SEMUA" → []  (caller mengembang ke semua slot mengajar)

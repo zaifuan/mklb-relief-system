@@ -79,7 +79,7 @@ function startMinitFmt(masaFmt) {
 }
 
 // Stream PDF terus ke `res` (atau mana-mana writable stream).
-export function streamReliefPdf(res, { tarikhDate, hari, namaSekolah, baris: barisInput, dijanaOleh, masaJana }) {
+export function streamReliefPdf(res, { tarikhDate, hari, namaSekolah, baris: barisInput, pertukaran = [], dijanaOleh, masaJana }) {
   // ── Sorting LAST-MILE (sebelum pagination & render) ──
   // Dilakukan di sini supaya PDF SENTIASA tersusun ikut nama guru tidak hadir
   // A–Z → masa mula → kelas, tidak kira urutan data yang dihantar.
@@ -236,6 +236,84 @@ export function streamReliefPdf(res, { tarikhDate, hari, namaSekolah, baris: bar
     });
 
     drawGrid(pageTableTop, y);
+  }
+
+  // ── PERTUKARAN KELAS (SUKA SAMA SUKA) — seksyen tambahan ──
+  // Slot yang diambil alih secara persetujuan (BUKAN relief). Hanya dipaparkan
+  // jika ada data; jadual relief di atas TIDAK diubah.
+  if (pertukaran && pertukaran.length) {
+    const swFix = 34 + 64 + 60 + 110 + 150; // Bil+Slot+Kelas+Subjek+Masa
+    const swCols = [
+      { key: 'bil', label: 'Bil', w: 34, align: 'center' },
+      { key: 'slot', label: 'Slot', w: 64, align: 'center' },
+      { key: 'kelas', label: 'Kelas', w: 60, align: 'center' },
+      { key: 'subjek', label: 'Subjek', w: 110, align: 'center' },
+      { key: 'masa', label: 'Masa', w: 150, align: 'center' },
+      { key: 'tukar', label: 'Guru Asal  \u2192  Guru Ambil Alih', w: contentW - swFix, align: 'left' },
+    ];
+
+    const swTajuk = (yy) => {
+      doc.fillColor(HIJAU_GELAP).font('Helvetica-Bold').fontSize(13)
+        .text('PERTUKARAN KELAS (SUKA SAMA SUKA)', ML, yy);
+      doc.fillColor('#55665f').font('Helvetica-Oblique').fontSize(8.5)
+        .text('Kelas diambil alih secara persetujuan antara guru — bukan relief, tidak dijana semula.', ML, yy + 17);
+      return yy + 32;
+    };
+    const swHeadJadual = (yy) => {
+      doc.rect(ML, yy, contentW, HEAD_H).fill(HIJAU);
+      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9.5);
+      let x = ML;
+      for (const c of swCols) { doc.text(c.label, x + 5, yy + 6, { width: c.w - 10, align: c.align }); x += c.w; }
+      return yy + HEAD_H;
+    };
+    const swGrid = (top, bottom) => {
+      doc.strokeColor(GARIS).lineWidth(0.8);
+      doc.rect(ML, top, contentW, bottom - top).stroke();
+      let x = ML;
+      for (let k = 0; k < swCols.length - 1; k++) { x += swCols[k].w; doc.moveTo(x, top).lineTo(x, bottom).stroke(); }
+    };
+
+    // Jarak selepas jadual relief; halaman baharu jika ruang tak cukup.
+    y += 22;
+    if (y + 32 + HEAD_H + 18 > bottomLimit) { doc.addPage(); y = 44; }
+    y = swTajuk(y);
+    let swTop = y;
+    y = swHeadJadual(y);
+
+    pertukaran.forEach((p, i) => {
+      doc.font('Helvetica').fontSize(9.5);
+      const tukarTeks = `${p.guruAsal || '-'}   \u2192   ${p.guruGanti || '-'}`;
+      const rh = Math.max(14, doc.heightOfString(tukarTeks, { width: swCols[5].w - 10 })) + ROW_PAD * 2;
+
+      if (y + rh > bottomLimit) {
+        swGrid(swTop, y);
+        doc.addPage();
+        y = 44;
+        swTop = y;
+        y = swHeadJadual(y);
+      }
+
+      if (i % 2 === 1) doc.rect(ML, y, contentW, rh).fill(ZEBRA);
+      doc.moveTo(ML, y + rh).lineTo(pageW - MR, y + rh).strokeColor('#e3ebe8').lineWidth(0.5).stroke();
+
+      const cells = {
+        bil: String(i + 1),
+        slot: p.slot || '-',
+        kelas: p.kelas || '-',
+        subjek: p.subjek || '-',
+        masa: fmtMasaAmPm(p.masa) || '-',
+        tukar: tukarTeks,
+      };
+      let x = ML;
+      for (const c of swCols) {
+        doc.fillColor(c.key === 'tukar' ? HIJAU_GELAP : TEKS);
+        doc.font(c.key === 'kelas' || c.key === 'tukar' ? 'Helvetica-Bold' : 'Helvetica');
+        doc.fontSize(9.5).text(cells[c.key], x + 5, y + ROW_PAD, { width: c.w - 10, align: c.align });
+        x += c.w;
+      }
+      y += rh;
+    });
+    swGrid(swTop, y);
   }
 
   // ── Tandatangan (muka surat akhir) ──

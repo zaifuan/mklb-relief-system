@@ -547,6 +547,45 @@ export default function ReliefDashboard() {
           </>
         )}
 
+        {/* Pertukaran Kelas (Suka Sama Suka) — bukan relief */}
+        {data && data.swaps && data.swaps.length > 0 && (
+          <section className="swapCard">
+            <div className="swapHead">
+              <h3 className="swapTitle">Pertukaran Kelas (Suka Sama Suka)</h3>
+              <span className="swapCount">{data.swaps.length}</span>
+            </div>
+            <p className="swapSub">
+              Kelas diambil alih secara persetujuan antara guru — bukan relief, tidak dijana semula.
+            </p>
+            <div className="tableWrap">
+              <table className="tbl">
+                <thead>
+                  <tr>
+                    <th>Slot</th>
+                    <th>Kelas</th>
+                    <th>Subjek</th>
+                    <th>Masa</th>
+                    <th className="cName">Asal</th>
+                    <th className="cName">Diambil Alih</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.swaps.map((s) => (
+                    <tr key={s.id}>
+                      <td>{s.slot || '-'}</td>
+                      <td>{s.kelas}</td>
+                      <td>{s.subjek || '-'}</td>
+                      <td>{s.masa}</td>
+                      <td>{s.guruAsal}</td>
+                      <td className="swapTo">{s.guruGanti}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
         {/* Senarai relief — jadual compact (semua skrin; mobile boleh swipe kiri-kanan) */}
         {data && (
           <div className="tableWrap">
@@ -674,6 +713,13 @@ export default function ReliefDashboard() {
         .saving { display: inline-block; margin-left: 6px; font-size: 12px; color: #5f7a72; }
 
         /* Jadual */
+        .swapCard { margin: 0 0 18px; padding: 14px 16px 4px; background: #f6faf9; border: 1px solid #cfe0db; border-radius: 14px; }
+        .swapHead { display: flex; align-items: center; gap: 10px; }
+        .swapTitle { margin: 0; font-size: 15px; font-weight: 700; color: #0f766e; }
+        .swapCount { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 7px; font-size: 12px; font-weight: 700; color: #0b5e57; background: #d8efe8; border-radius: 999px; }
+        .swapSub { margin: 4px 0 12px; font-size: 12.5px; color: #5b716a; }
+        .swapCard .tableWrap { border-color: #d8e6e1; }
+        .swapTo { font-weight: 700; color: #0b5e57; }
         .tableWrap { overflow-x: auto; background: #fff; border: 1px solid #dce5e2; border-radius: 14px; -webkit-overflow-scrolling: touch; }
         .tbl { width: 100%; border-collapse: collapse; min-width: 880px; font-size: 13.5px; }
         .tbl th { text-align: left; padding: 12px 14px; background: #0f766e; color: #fff; font-weight: 600; font-size: 12.5px; white-space: nowrap; }

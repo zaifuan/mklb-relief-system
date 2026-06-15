@@ -97,6 +97,7 @@ export function cariBestCalon({
   hadSlotOverride, // null = PASS 2 (benarkan Tier 2)
   pengecualianList = [],
   guruKecualiList = [],
+  swapBuyers, // Set<normNama>: guru yang MENGAMBIL ALIH kelas (class_swaps) — sibuk sepanjang hari
   config,
 }) {
   const calon = []; // Tier 1
@@ -110,6 +111,12 @@ export function cariBestCalon({
 
   for (const namaGuru of semuaGuruHari) {
     const n = norm(namaGuru);
+
+    // 0) Pertukaran Kelas (Suka Sama Suka): guru yang MENGAMBIL ALIH mana-mana
+    //    kelas pada hari ini sedang sibuk → TIDAK boleh jadi calon relief untuk
+    //    mana-mana slot pada hari yang SAMA. (Guru tidak hadir asal sudah
+    //    dikecualikan melalui semuaAbsenSet/semuaAbsenMap.)
+    if (swapBuyers && swapBuyers.has(n)) continue;
 
     // 1) Absen peka masa
     if (semuaAbsenMap && semuaAbsenMap[n]) {

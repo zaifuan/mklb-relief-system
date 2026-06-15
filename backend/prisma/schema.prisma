@@ -175,6 +175,7 @@ model AbsenceRecord {
   deletedAt     DateTime? // soft delete (Padam oleh Super Admin)
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
+  classSwaps    ClassSwap[] // Pertukaran Kelas (Suka Sama Suka) — BUKAN relief
 
   @@index([tarikh, statusBorang])
   @@index([guruNama, tarikh])
@@ -260,6 +261,41 @@ model SpecialRestriction {
   updatedAt  DateTime @updatedAt
 
   @@map("special_restrictions")
+}
+
+// ──────────────────────────────────────────────
+// PERTUKARAN KELAS (SUKA SAMA SUKA) — BUKAN relief.
+// Disimpan BERASINGAN daripada relief_assignments dan TIADA relasi ke
+// relief_batches. Maka "Jana Semula Relief" (yang hanya memadam relief_batches
+// / relief_assignments) TIDAK akan menyentuh, memadam, atau mereset jadual ini.
+// Enjin relief melangkau slot yang sudah ada pertukaran (lihat relief.service.js).
+// Sistem ini berasaskan NAMA (sama seperti relief & jadual), jadi guruAsal /
+// guruGanti / kelas / masa ialah kunci padanan utama; ID disimpan sebagai
+// rujukan pilihan sahaja.
+// ──────────────────────────────────────────────
+model ClassSwap {
+  id              Int            @id @default(autoincrement())
+  absenceRecordId Int? // pautan ke borang ketidakhadiran (SetNull jika rekod dipadam)
+  absenceRecord   AbsenceRecord? @relation(fields: [absenceRecordId], references: [id], onDelete: SetNull)
+  guruAsal        String // nama guru tidak hadir (penyerah kelas)
+  guruGanti       String // nama guru yang mengambil alih (BUKAN relief)
+  teacherIdAsal   Int? // rujukan pilihan
+  teacherIdGanti  Int? // rujukan pilihan
+  scheduleId      Int? // rujukan baris teacher_schedule (pilihan)
+  slot            String? // label slot (pilihan)
+  hari            String // ISNIN..JUMAAT
+  tarikh          DateTime       @db.Date
+  kelas           String
+  masa            String
+  subjek          String?
+  catatan         String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([tarikh])
+  @@index([guruAsal, tarikh])
+  @@index([absenceRecordId])
+  @@map("class_swaps")
 }
 
 // ──────────────────────────────────────────────

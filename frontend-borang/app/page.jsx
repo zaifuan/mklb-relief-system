@@ -93,6 +93,13 @@ export default function Page() {
   const [tmpMasaTamat, setTmpMasaTamat] = useState('');
   const [masaErr, setMasaErr] = useState('');
 
+  // ── Pertukaran Kelas (Suka Sama Suka) ──
+  const [adaPertukaran, setAdaPertukaran] = useState(false); // false = "Tidak", true = "Ya"
+  const [jadualSlots, setJadualSlots] = useState([]); // slot mengajar guru pada hari itu
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [slotsError, setSlotsError] = useState('');
+  const [swapPick, setSwapPick] = useState({}); // { [scheduleId]: { checked, guruGanti } }
+
   useEffect(() => {
     api
       .options()
@@ -103,6 +110,39 @@ export default function Page() {
 
   const perluDetail = !!opts?.sebabPerluDetail?.includes(form.sebab);
   const separuh = form.jenis === 'SEPARUH_HARI';
+
+  // Pertukaran kelas hanya untuk mod Individu + SATU hari (selaras backend).
+  const bolehSwap =
+    mode === 'individu' &&
+    !!form.guruNama &&
+    !!form.tarikhMula &&
+    (!form.tarikhTamat || form.tarikhTamat === form.tarikhMula);
+
+  // Muat jadual mengajar guru pada hari dipilih bila "Ya" ditekan.
+  useEffect(() => {
+    if (!bolehSwap || !adaPertukaran) {
+      setJadualSlots([]);
+      setSlotsError('');
+      return;
+    }
+    let cancel = false;
+    setSlotsLoading(true);
+    setSlotsError('');
+    api
+      .schedule(form.guruNama, form.tarikhMula)
+      .then((d) => {
+        if (!cancel) setJadualSlots(d.slots || []);
+      })
+      .catch((e) => {
+        if (!cancel) setSlotsError(e.message || 'Gagal memuat jadual guru');
+      })
+      .finally(() => {
+        if (!cancel) setSlotsLoading(false);
+      });
+    return () => {
+      cancel = true;
+    };
+  }, [bolehSwap, adaPertukaran, form.guruNama, form.tarikhMula]);
 
   function set(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -239,6 +279,26 @@ export default function Page() {
     setError('');
     setSubmitting(true);
     try {
+      // Pertukaran kelas — hanya mod Individu + SATU hari (selaras backend).
+      let pertukaran;
+      if (bolehSwap && adaPertukaran) {
+        const dipilih = jadualSlots.filter((s) => swapPick[s.scheduleId]?.checked);
+        if (dipilih.some((s) => !swapPick[s.scheduleId]?.guruGanti)) {
+          setError('Sila pilih guru ambil alih untuk setiap slot yang ditanda.');
+          setSubmitting(false);
+          return;
+        }
+        pertukaran = dipilih.map((s) => ({
+          scheduleId: s.scheduleId,
+          slot: s.slot || undefined,
+          kelas: s.kelas,
+          masa: s.masa,
+          subjek: s.subjek || undefined,
+          guruGanti: swapPick[s.scheduleId].guruGanti,
+        }));
+        if (!pertukaran.length) pertukaran = undefined;
+      }
+
       const payload = {
         ...(mode === 'kumpulan' ? { guruNamaList: guruList } : { guruNama: form.guruNama }),
         tarikhMula: form.tarikhMula,
@@ -248,6 +308,7 @@ export default function Page() {
         masaMula: separuh ? form.masaMula : undefined,
         masaTamat: separuh ? form.masaTamat || undefined : undefined,
         catatan: form.catatan.trim() || undefined,
+        pertukaran,
       };
       const res = await api.submit(payload);
       setResult(res);
@@ -264,6 +325,10 @@ export default function Page() {
     setResult(null);
     setError('');
     setSubmitting(false);
+    setAdaPertukaran(false);
+    setJadualSlots([]);
+    setSwapPick({});
+    setSlotsError('');
   }
 
   return (
@@ -569,6 +634,91 @@ export default function Page() {
               onChange={(e) => set('catatan', e.target.value)}
             />
 
+            {/* Pertukaran Kelas (Suka Sama Suka) — Individu + satu hari sahaja */}
+            {bolehSwap && (
+              <div className="swapBox">
+                <span className="lbl">Pertukaran Kelas (Suka Sama Suka)</span>
+                <p className="swapQ">Adakah terdapat kelas yang telah diambil alih oleh guru lain?</p>
+                <div className="swapRadios" role="radiogroup" aria-label="Pertukaran kelas">
+                  <label className="swapRadio">
+                    <input
+                      type="radio"
+                      name="adaSwap"
+                      checked={!adaPertukaran}
+                      onChange={() => setAdaPertukaran(false)}
+                    />
+                    <span>Tidak</span>
+                  </label>
+                  <label className="swapRadio">
+                    <input
+                      type="radio"
+                      name="adaSwap"
+                      checked={adaPertukaran}
+                      onChange={() => setAdaPertukaran(true)}
+                    />
+                    <span>Ya</span>
+                  </label>
+                </div>
+
+                {adaPertukaran && (
+                  <div className="swapList">
+                    {slotsLoading ? (
+                      <p className="swapMuted">Memuat jadual…</p>
+                    ) : slotsError ? (
+                      <div className="alert" role="alert">{slotsError}</div>
+                    ) : jadualSlots.length === 0 ? (
+                      <p className="swapMuted">Tiada slot mengajar untuk guru/tarikh ini.</p>
+                    ) : (
+                      jadualSlots.map((s) => {
+                        const pick = swapPick[s.scheduleId] || {};
+                        return (
+                          <div className="swapRow" key={s.scheduleId}>
+                            <label className="swapSlot">
+                              <input
+                                type="checkbox"
+                                checked={!!pick.checked}
+                                onChange={(e) =>
+                                  setSwapPick((p) => ({
+                                    ...p,
+                                    [s.scheduleId]: { ...p[s.scheduleId], checked: e.target.checked },
+                                  }))
+                                }
+                              />
+                              <span className="swapSlotTxt">
+                                {s.slot ? `Slot ${s.slot}` : 'Slot'} | {s.kelas} | {s.subjek || '-'}
+                                <span className="swapMasa"> ({s.masa})</span>
+                              </span>
+                            </label>
+                            {pick.checked && (
+                              <select
+                                className="inp"
+                                value={pick.guruGanti || ''}
+                                onChange={(e) =>
+                                  setSwapPick((p) => ({
+                                    ...p,
+                                    [s.scheduleId]: { ...p[s.scheduleId], guruGanti: e.target.value },
+                                  }))
+                                }
+                              >
+                                <option value="">Pilih guru ambil alih…</option>
+                                {opts?.teachers
+                                  ?.filter((t) => t.nama !== form.guruNama)
+                                  .map((t) => (
+                                    <option key={t.id} value={t.nama}>
+                                      {t.nama}
+                                    </option>
+                                  ))}
+                              </select>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {error && <div className="alert" role="alert" aria-live="assertive">{error}</div>}
 
             <button type="submit" className="btn" disabled={submitting || loadingOpts}>
@@ -765,6 +915,76 @@ export default function Page() {
           resize: vertical;
           min-height: 64px;
           font-family: inherit;
+        }
+        .swapBox {
+          margin-top: 16px;
+          padding: 14px;
+          background: #f6faf9;
+          border: 1px solid #d3ded9;
+          border-radius: 12px;
+        }
+        .swapQ {
+          margin: 6px 0 10px;
+          font-size: 13.5px;
+          color: #2b3f39;
+        }
+        .swapRadios {
+          display: flex;
+          gap: 18px;
+        }
+        .swapRadio {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          font-size: 14px;
+          color: #14302b;
+          cursor: pointer;
+        }
+        .swapRadio input {
+          width: 17px;
+          height: 17px;
+          accent-color: #0f766e;
+        }
+        .swapList {
+          margin-top: 12px;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+        .swapMuted {
+          margin: 4px 0;
+          font-size: 13px;
+          color: #80958e;
+        }
+        .swapRow {
+          padding: 10px 12px;
+          background: #fff;
+          border: 1px solid #e1e9e6;
+          border-radius: 10px;
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .swapSlot {
+          display: flex;
+          align-items: flex-start;
+          gap: 9px;
+          font-size: 13.5px;
+          color: #1f2d29;
+          cursor: pointer;
+        }
+        .swapSlot input {
+          margin-top: 2px;
+          width: 17px;
+          height: 17px;
+          accent-color: #0f766e;
+          flex: none;
+        }
+        .swapSlotTxt {
+          line-height: 1.4;
+        }
+        .swapMasa {
+          color: #5b716a;
         }
         .hint {
           margin: 6px 0 0;
