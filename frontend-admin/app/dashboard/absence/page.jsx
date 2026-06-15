@@ -258,14 +258,14 @@ export default function AbsenceDashboard() {
               <thead>
                 <tr>
                   <th>Tarikh</th><th>Hari</th><th>Nama Guru</th>
-                  <th>Sebab</th><th>Status</th><th>Tindakan</th>
+                  <th>Sebab</th><th>Catatan</th><th>Status</th><th>Tindakan</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={6} className="empty">Memuatkan…</td></tr>
+                  <tr><td colSpan={7} className="empty">Memuatkan…</td></tr>
                 ) : records.length === 0 ? (
-                  <tr><td colSpan={6} className="empty">Tiada rekod ketidakhadiran untuk tarikh ini.</td></tr>
+                  <tr><td colSpan={7} className="empty">Tiada rekod ketidakhadiran untuk tarikh ini.</td></tr>
                 ) : (
                   records.map((r) => (
                     <tr key={r.id}>
@@ -276,6 +276,7 @@ export default function AbsenceDashboard() {
                         {r.groupReference && <span className="badge grp">KUMPULAN</span>}
                       </td>
                       <td>{sebabLabel(r.sebabKategori)}</td>
+                      <td className="catatanCell">{r.sebabDetail || '—'}</td>
                       <td><span className={`badge ${r.statusBorang.toLowerCase()}`}>{STATUS_LABEL[r.statusBorang]}</span></td>
                       <td><button className="link" onClick={() => openDetail(r.id)}>Urus</button></td>
                     </tr>
@@ -409,10 +410,11 @@ export default function AbsenceDashboard() {
         .btn.full { width: 100%; margin-top: 16px; }
         .alert { margin: 0 0 14px; padding: 10px 12px; font-size: 13px; color: #b42318; background: #fef3f2; border: 1px solid #fcd2cd; border-radius: 9px; }
         .tableWrap { overflow-x: auto; background: #fff; border: 1px solid #dce5e2; border-radius: 12px; }
-        .tbl { width: 100%; border-collapse: collapse; min-width: 560px; font-size: 13.5px; }
+        .tbl { width: 100%; border-collapse: collapse; min-width: 660px; font-size: 13.5px; }
         .tbl th { text-align: left; padding: 11px 12px; background: #f1f5f4; color: #3b544c; font-weight: 600; border-bottom: 1px solid #dce5e2; white-space: nowrap; }
         .tbl td { padding: 11px 12px; border-bottom: 1px solid #eef2f0; color: #233a33; white-space: nowrap; }
         .tbl td.nameCell { white-space: normal; min-width: 150px; }
+        .tbl td.catatanCell { white-space: normal; min-width: 130px; max-width: 230px; color: #4b5d57; }
         .tbl tr:last-child td { border-bottom: none; }
         .mono { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
         .empty { text-align: center; color: #80958e; padding: 28px 0; }
