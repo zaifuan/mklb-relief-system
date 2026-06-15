@@ -100,6 +100,33 @@ export function streamReliefPdf(res, { tarikhDate, hari, namaSekolah, baris: bar
     JSON.stringify(baris.map((b, i) => ({ bil: i + 1, guru: b.guruTakHadir, masa: b.masa, kelas: b.kelas })))
   );
 
+  // ── Kiraan relief per guru ganti (HANYA relief automatik jadual utama) ──
+  // Tidak kira "TIADA PENGGANTI", tidak kira slot kosong, tidak kira pertukaran kelas.
+  const reliefCount = {}; // KEY (UPPERCASE) → bilangan
+  const reliefNama = {}; // KEY → nama paparan (asal)
+  for (const b of baris) {
+    if (!b.guruGanti || b.guruGanti === TIADA) continue;
+    const key = String(b.guruGanti).trim().toUpperCase();
+    reliefCount[key] = (reliefCount[key] || 0) + 1;
+    if (!reliefNama[key]) reliefNama[key] = String(b.guruGanti).trim();
+  }
+  const multiList = Object.keys(reliefCount)
+    .filter((k) => reliefCount[k] > 1)
+    .map((k) => ({ nama: reliefNama[k], count: reliefCount[k] }))
+    .sort((a, b) => b.count - a.count || a.nama.localeCompare(b.nama, 'ms'));
+
+  // Maklumat sel "Guru Ganti": teks (+ "(n)" jika >1), serta flag gaya.
+  const gantiInfo = (b) => {
+    const isTiada = b.guruGanti === TIADA;
+    const isKosong = !b.guruGanti;
+    if (isTiada) return { text: 'TIADA PENGGANTI', isMulti: false, isTiada, isKosong };
+    if (isKosong) return { text: '—', isMulti: false, isTiada, isKosong };
+    const key = String(b.guruGanti).trim().toUpperCase();
+    const cnt = reliefCount[key] || 1;
+    const isMulti = cnt > 1;
+    return { text: isMulti ? `${b.guruGanti} (${cnt})` : b.guruGanti, isMulti, isTiada, isKosong };
+  };
+
   const doc = new PDFDocument({
     size: 'A4',
     layout: 'landscape',
@@ -115,11 +142,11 @@ export function streamReliefPdf(res, { tarikhDate, hari, namaSekolah, baris: bar
   const MR = 40;
   const contentW = pageW - ML - MR;
 
-  const wFix = 34 + 226 + 50 + 80 + 132; // Bil+Guru+Kelas+Subjek+Masa
+  const wFix = 34 + 198 + 78 + 80 + 132; // Bil+Guru+Kelas+Subjek+Masa
   const cols = [
     { key: 'bil', label: 'Bil', w: 34, align: 'center' },
-    { key: 'guru', label: 'Guru Tidak Hadir', w: 226, align: 'left' },
-    { key: 'kelas', label: 'Kelas', w: 50, align: 'center' },
+    { key: 'guru', label: 'Guru Tidak Hadir', w: 198, align: 'left' },
+    { key: 'kelas', label: 'Kelas', w: 78, align: 'center' },
     { key: 'subjek', label: 'Subjek', w: 80, align: 'center' },
     { key: 'masa', label: 'Masa', w: 132, align: 'center' },
     { key: 'ganti', label: 'Guru Ganti', w: contentW - wFix, align: 'left' },
@@ -168,10 +195,11 @@ export function streamReliefPdf(res, { tarikhDate, hari, namaSekolah, baris: bar
   }
 
   function tinggiBaris(b) {
+    const gi = gantiInfo(b);
     doc.font('Helvetica').fontSize(9.5);
     const hGuru = doc.heightOfString(b.guruTakHadir || '-', { width: cols[1].w - 10 });
-    const gantiTeks = b.guruGanti === TIADA ? 'TIADA PENGGANTI' : b.guruGanti || '—';
-    const hGanti = doc.heightOfString(gantiTeks, { width: cols[5].w - 10 });
+    doc.font(gi.isMulti || gi.isTiada ? 'Helvetica-Bold' : 'Helvetica');
+    const hGanti = doc.heightOfString(gi.text, { width: cols[5].w - 10 });
     return Math.max(14, hGuru, hGanti) + ROW_PAD * 2;
   }
 
@@ -187,6 +215,15 @@ export function streamReliefPdf(res, { tarikhDate, hari, namaSekolah, baris: bar
 
   // ── Kandungan ──
   let y = headerDokumen();
+
+  // Ringkasan: Guru Menerima >1 Relief (hanya jika ada; relief automatik sahaja)
+  if (multiList.length) {
+    doc.fillColor(HIJAU_GELAP).font('Helvetica-Bold').fontSize(10).text('Guru Menerima >1 Relief:', ML, y);
+    y = doc.y + 2;
+    const teksMulti = multiList.map((m) => `\u2022  ${m.nama} (${m.count})`).join('        ');
+    doc.fillColor(TEKS).font('Helvetica').fontSize(9.5).text(teksMulti, ML, y, { width: contentW });
+    y = doc.y + 10;
+  }
 
   if (baris.length === 0) {
     doc.font('Helvetica').fontSize(12).fillColor('#80958e');
@@ -210,21 +247,20 @@ export function streamReliefPdf(res, { tarikhDate, hari, namaSekolah, baris: bar
       if (i % 2 === 1) doc.rect(ML, y, contentW, rh).fill(ZEBRA);
       doc.moveTo(ML, y + rh).lineTo(pageW - MR, y + rh).strokeColor('#e3ebe8').lineWidth(0.5).stroke();
 
-      const isTiada = b.guruGanti === TIADA;
-      const isKosong = !b.guruGanti;
+      const gi = gantiInfo(b);
       const cells = {
         bil: String(i + 1),
         guru: b.guruTakHadir || '-',
         kelas: b.kelas || '-',
         subjek: b.subjek || '-',
         masa: fmtMasaAmPm(b.masa) || '-',
-        ganti: isTiada ? 'TIADA PENGGANTI' : b.guruGanti || '—',
+        ganti: gi.text,
       };
       let x = ML;
       for (const c of cols) {
         if (c.key === 'ganti') {
-          doc.fillColor(isKosong ? '#b42318' : isTiada ? '#8a6d12' : TEKS);
-          doc.font(isTiada ? 'Helvetica-Bold' : 'Helvetica');
+          doc.fillColor(gi.isKosong ? '#b42318' : gi.isTiada ? '#8a6d12' : TEKS);
+          doc.font(gi.isTiada || gi.isMulti ? 'Helvetica-Bold' : 'Helvetica');
         } else {
           doc.fillColor(TEKS);
           doc.font(c.key === 'kelas' ? 'Helvetica-Bold' : 'Helvetica');
@@ -242,14 +278,16 @@ export function streamReliefPdf(res, { tarikhDate, hari, namaSekolah, baris: bar
   // Slot yang diambil alih secara persetujuan (BUKAN relief). Hanya dipaparkan
   // jika ada data; jadual relief di atas TIDAK diubah.
   if (pertukaran && pertukaran.length) {
-    const swFix = 34 + 64 + 60 + 110 + 150; // Bil+Slot+Kelas+Subjek+Masa
+    const swFix = 30 + 44 + 78 + 90 + 130; // Bil+Slot+Kelas+Subjek+Masa
+    const wAsal = 196; // Guru Asal
     const swCols = [
-      { key: 'bil', label: 'Bil', w: 34, align: 'center' },
-      { key: 'slot', label: 'Slot', w: 64, align: 'center' },
-      { key: 'kelas', label: 'Kelas', w: 60, align: 'center' },
-      { key: 'subjek', label: 'Subjek', w: 110, align: 'center' },
-      { key: 'masa', label: 'Masa', w: 150, align: 'center' },
-      { key: 'tukar', label: 'Guru Asal  \u2192  Guru Ambil Alih', w: contentW - swFix, align: 'left' },
+      { key: 'bil', label: 'Bil', w: 30, align: 'center' },
+      { key: 'slot', label: 'Slot', w: 44, align: 'center' },
+      { key: 'kelas', label: 'Kelas', w: 78, align: 'center' },
+      { key: 'subjek', label: 'Subjek', w: 90, align: 'center' },
+      { key: 'masa', label: 'Masa', w: 130, align: 'center' },
+      { key: 'asal', label: 'Guru Asal', w: wAsal, align: 'left' },
+      { key: 'ganti', label: 'Guru Ambil Alih', w: contentW - swFix - wAsal, align: 'left' },
     ];
 
     const swTajuk = (yy) => {
@@ -281,9 +319,12 @@ export function streamReliefPdf(res, { tarikhDate, hari, namaSekolah, baris: bar
     y = swHeadJadual(y);
 
     pertukaran.forEach((p, i) => {
+      const wGanti = contentW - swFix - wAsal;
       doc.font('Helvetica').fontSize(9.5);
-      const tukarTeks = `${p.guruAsal || '-'}   \u2192   ${p.guruGanti || '-'}`;
-      const rh = Math.max(14, doc.heightOfString(tukarTeks, { width: swCols[5].w - 10 })) + ROW_PAD * 2;
+      const hAsal = doc.heightOfString(p.guruAsal || '-', { width: wAsal - 10 });
+      doc.font('Helvetica-Bold').fontSize(9.5);
+      const hGanti = doc.heightOfString(p.guruGanti || '-', { width: wGanti - 10 });
+      const rh = Math.max(14, hAsal, hGanti) + ROW_PAD * 2;
 
       if (y + rh > bottomLimit) {
         swGrid(swTop, y);
@@ -302,12 +343,14 @@ export function streamReliefPdf(res, { tarikhDate, hari, namaSekolah, baris: bar
         kelas: p.kelas || '-',
         subjek: p.subjek || '-',
         masa: fmtMasaAmPm(p.masa) || '-',
-        tukar: tukarTeks,
+        asal: p.guruAsal || '-',
+        ganti: p.guruGanti || '-',
       };
       let x = ML;
       for (const c of swCols) {
-        doc.fillColor(c.key === 'tukar' ? HIJAU_GELAP : TEKS);
-        doc.font(c.key === 'kelas' || c.key === 'tukar' ? 'Helvetica-Bold' : 'Helvetica');
+        const isGanti = c.key === 'ganti';
+        doc.fillColor(isGanti ? HIJAU_GELAP : TEKS);
+        doc.font(c.key === 'kelas' || isGanti ? 'Helvetica-Bold' : 'Helvetica');
         doc.fontSize(9.5).text(cells[c.key], x + 5, y + ROW_PAD, { width: c.w - 10, align: c.align });
         x += c.w;
       }
