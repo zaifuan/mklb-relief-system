@@ -17,8 +17,8 @@ import { authorize } from '../middleware/authorize.js';
 
 const router = Router();
 
-// Semua endpoint: SUPER_ADMIN atau ADMIN_RELIEF
-router.use(authenticate, authorize('SUPER_ADMIN', 'ADMIN_RELIEF'));
+// Semua endpoint: SUPER_ADMIN atau ADMIN
+router.use(authenticate, authorize('SUPER_ADMIN', 'ADMIN'));
 
 router.get('/', listAbsence);
 router.get('/summary', summary); // sebelum /:id

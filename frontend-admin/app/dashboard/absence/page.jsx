@@ -239,14 +239,16 @@ export default function AbsenceDashboard() {
                 onChange={(e) => setTarikh(e.target.value || todayKL())}
               />
             </label>
-            <button
-              type="button"
-              className="btn tgBtn"
-              onClick={openTelegram}
-              disabled={loading || tgLoading || records.length === 0}
-            >
-              <span aria-hidden="true">✈</span> Hantar Telegram
-            </button>
+            {isSuper && (
+              <button
+                type="button"
+                className="btn tgBtn"
+                onClick={openTelegram}
+                disabled={loading || tgLoading || records.length === 0}
+              >
+                <span aria-hidden="true">✈</span> Hantar Telegram
+              </button>
+            )}
           </div>
 
           {error && <div className="alert" role="alert">{error}</div>}
