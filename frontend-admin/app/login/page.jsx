@@ -1,12 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { api } from '../../lib/api.js';
 import { setToken } from '../../lib/auth.js';
 
 export default function LoginPage() {
-  const router = useRouter();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
@@ -20,8 +18,13 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const { token } = await api.login(username.trim(), password);
+      if (!token) throw new Error('Token tidak diterima. Cuba lagi.');
       setToken(token);
-      router.replace('/dashboard');
+      // Navigasi KERAS (bukan router.replace) supaya permintaan peringkat-atas
+      // membawa cookie 'token' yang baru ditulis → middleware nampak token →
+      // terus masuk /dashboard. Ini elak "stuck Memproses…" akibat soft-nav
+      // yang berlaku sebelum cookie sempat dibaca (terutamanya di Safari/WebKit).
+      window.location.assign('/dashboard');
     } catch (err) {
       setError(err.message || 'Log masuk gagal. Cuba lagi.');
       setLoading(false);
