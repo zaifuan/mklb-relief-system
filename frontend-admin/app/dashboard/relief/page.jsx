@@ -7,6 +7,9 @@ import { api } from '../../../lib/api.js';
 const STATUS_BATCH = { DRAF: 'Draf', DIJANA: 'Dijana', DIHANTAR: 'Dihantar', SELESAI: 'Selesai' };
 const TERKUNCI = ['DIHANTAR', 'SELESAI'];
 const TIADA = 'TIADA_PENGGANTI'; // nilai stabil; dipapar sebagai "TIADA PENGGANTI"
+// Nilai sentinel utk pilihan "PILIH SEMUA KELAS" dalam dropdown Tetapan Khas (tab Kelas).
+// HANYA untuk UI — tidak pernah disimpan/dihantar; ia diganti dengan semua kelas sebenar.
+const SEMUA_KELAS = '__ALL_CLASSES__';
 
 function todayKL() {
   try {
@@ -415,10 +418,21 @@ export default function ReliefDashboard() {
             <select
               className="inp grow"
               value=""
-              onChange={(e) => { tambahChip(e.target.value); e.target.value = ''; }}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === SEMUA_KELAS) {
+                  // Pilih semua kelas SEBENAR (kecuali yang sudah dikecualikan).
+                  // Literal "PILIH SEMUA KELAS" tidak pernah disimpan.
+                  setSsChips(ssSource.filter((x) => !ssActiveSet.has(x)));
+                } else {
+                  tambahChip(v);
+                }
+                e.target.value = '';
+              }}
               aria-label={ssCur.pilih}
             >
               <option value="">{ssCur.pilih} (boleh lebih dari satu)…</option>
+              {ssTab === 'kelas' && <option value={SEMUA_KELAS}>PILIH SEMUA KELAS</option>}
               {ssAvail.map((x) => (
                 <option key={x} value={x}>{x}</option>
               ))}
