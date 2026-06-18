@@ -48,6 +48,23 @@ function susunIkutNama(rows) {
   });
 }
 
+// Nombor slot (cth "Slot 8"/"8"/8) → integer untuk susunan; tiada → akhir sekali.
+function slotNombor(slot) {
+  const m = String(slot ?? '').match(/\d+/);
+  return m ? parseInt(m[0], 10) : 9999;
+}
+
+// Susun pertukaran kelas: guruAsal A–Z → slot menaik.
+// SATU sumber kebenaran dipakai OLEH dashboard (getReliefByTarikh) DAN PDF
+// (reliefPdf) supaya kedua-duanya MUSTAHIL berbeza urutan.
+function susunPertukaran(rows) {
+  return [...rows].sort((a, b) => {
+    const byAsal = String(a.guruAsal || '').localeCompare(String(b.guruAsal || ''), 'ms');
+    if (byAsal !== 0) return byAsal;
+    return slotNombor(a.slot) - slotNombor(b.slot);
+  });
+}
+
 // ── POST /api/relief/generate ─────────────────────────────
 export async function generateRelief(req, res) {
   const parsed = bodySchema.safeParse(req.body);
@@ -144,18 +161,18 @@ export async function getReliefByTarikh(req, res) {
     ]);
 
     // Pertukaran kelas aktif (rekod ketidakhadiran masih AKTIF, atau tiada pautan)
-    const swaps = swapRows
-      .filter((s) => !s.absenceRecord || (s.absenceRecord.statusBorang === 'AKTIF' && !s.absenceRecord.deletedAt))
-      .map((s) => ({
-        id: s.id,
-        slot: s.slot,
-        kelas: s.kelas,
-        masa: s.masa,
-        subjek: s.subjek,
-        hari: s.hari,
-        guruAsal: s.guruAsal,
-        guruGanti: s.guruGanti,
-      }));
+    const swaps = susunPertukaran(
+      swapRows.filter((s) => !s.absenceRecord || (s.absenceRecord.statusBorang === 'AKTIF' && !s.absenceRecord.deletedAt))
+    ).map((s) => ({
+      id: s.id,
+      slot: s.slot,
+      kelas: s.kelas,
+      masa: s.masa,
+      subjek: s.subjek,
+      hari: s.hari,
+      guruAsal: s.guruAsal,
+      guruGanti: s.guruGanti,
+    }));
 
     if (!batch) {
       // Tiada batch relief. Jika ada pertukaran kelas, tetap pulangkan supaya
@@ -303,22 +320,16 @@ export async function reliefPdf(req, res) {
       orderBy: { id: 'asc' },
       include: { absenceRecord: { select: { statusBorang: true, deletedAt: true } } },
     });
-    const pertukaran = swapRows
-      .filter((s) => !s.absenceRecord || (s.absenceRecord.statusBorang === 'AKTIF' && !s.absenceRecord.deletedAt))
-      .map((s) => ({
-        slot: s.slot || '-',
-        kelas: s.kelas,
-        subjek: s.subjek || '-',
-        masa: fmtMasaJulat(s.masa),
-        guruAsal: s.guruAsal,
-        guruGanti: s.guruGanti,
-      }))
-      .sort((a, b) => {
-        const ma = parseMasa(a.masa)[0] ?? 9999;
-        const mb = parseMasa(b.masa)[0] ?? 9999;
-        if (ma !== mb) return ma - mb;
-        return String(a.kelas).localeCompare(String(b.kelas), 'ms');
-      });
+    const pertukaran = susunPertukaran(
+      swapRows.filter((s) => !s.absenceRecord || (s.absenceRecord.statusBorang === 'AKTIF' && !s.absenceRecord.deletedAt))
+    ).map((s) => ({
+      slot: s.slot || '-',
+      kelas: s.kelas,
+      subjek: s.subjek || '-',
+      masa: fmtMasaJulat(s.masa),
+      guruAsal: s.guruAsal,
+      guruGanti: s.guruGanti,
+    }));
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="jadual-ganti-${req.params.tarikh}.pdf"`);
