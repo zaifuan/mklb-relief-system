@@ -298,15 +298,18 @@ export async function reliefPdf(req, res) {
       where: { tarikh: tarikhDate },
       include: { assignments: true },
     });
-    if (!batch) return res.status(404).json({ mesej: 'Tiada batch relief untuk tarikh ini.' });
 
-    const baris = susunIkutNama(batch.assignments).map((a) => ({
-      guruTakHadir: a.guruTakHadir,
-      kelas: a.kelas,
-      subjek: a.subjek || '-',
-      masa: fmtMasaJulat(a.masa),
-      guruGanti: a.guruGanti,
-    }));
+    // Batch mungkin TIADA jika semua ketidakhadiran diuruskan melalui Pertukaran
+    // Kelas (Suka Sama Suka) — tiada relief dijana. PDF masih boleh dijana.
+    const baris = batch
+      ? susunIkutNama(batch.assignments).map((a) => ({
+          guruTakHadir: a.guruTakHadir,
+          kelas: a.kelas,
+          subjek: a.subjek || '-',
+          masa: fmtMasaJulat(a.masa),
+          guruGanti: a.guruGanti,
+        }))
+      : [];
 
     // DEBUG sementara — sahkan susunan baris masuk PDF (nama A–Z → masa → kelas)
     console.log(
@@ -331,14 +334,19 @@ export async function reliefPdf(req, res) {
       guruGanti: s.guruGanti,
     }));
 
+    // Gagal HANYA jika tiada slot relief DAN tiada pertukaran kelas.
+    if (baris.length === 0 && pertukaran.length === 0) {
+      return res.status(404).json({ mesej: 'Tiada slot relief atau pertukaran kelas untuk tarikh ini.' });
+    }
+
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="jadual-ganti-${req.params.tarikh}.pdf"`);
 
     await writeAudit({
       userId: req.user?.id || null,
       action: 'RELIEF_PDF',
-      entity: `relief_batch:${batch.id}`,
-      detail: { tarikh: req.params.tarikh, slot: baris.length },
+      entity: batch ? `relief_batch:${batch.id}` : `relief_swaps:${req.params.tarikh}`,
+      detail: { tarikh: req.params.tarikh, slot: baris.length, pertukaran: pertukaran.length },
       ip: getClientIp(req),
     });
 
@@ -348,8 +356,8 @@ export async function reliefPdf(req, res) {
       namaSekolah: 'SABK MAAHAD AL KHAIR LIL BANAT',
       baris,
       pertukaran,
-      dijanaOleh: batch.generatedBy,
-      masaJana: batch.generatedAt,
+      dijanaOleh: batch?.generatedBy || null,
+      masaJana: batch?.generatedAt || null,
     });
   } catch (err) {
     console.error('reliefPdf ERROR:', err);
