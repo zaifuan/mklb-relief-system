@@ -4,7 +4,8 @@
 //
 //  • Token & Chat ID DIBACA dari env (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)
 //    — bot & group lama sistem GAS. JANGAN hardcode.
-//  • Plain text (parse_mode kosong) — selamat untuk aksara khas, sama GAS.
+//  • parse_mode HTML — tajuk kategori <b>bold</b>, sebab detail <i>italic</i>.
+//    Teks dinamik DIESCAPE di snapshot.service.js (&, <, >, ").
 //  • Guna fetch terbina Node 22 — tiada dependency baharu.
 // ════════════════════════════════════════════════════════════
 
@@ -26,7 +27,7 @@ export async function sendTelegramMessage(text) {
     const resp = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode: '' }),
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
     });
 
     let data = null;
