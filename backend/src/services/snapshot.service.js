@@ -168,9 +168,9 @@ export async function buildSnapshot({
   // ════════════════════════════════════════════════════════
   if (pembatalan) {
     let msg = '⚠️ PEMBATALAN KETIDAKHADIRAN\n\n';
-    msg += 'KEMASKINI KETIDAKHADIRAN GURU\n\n';
-    msg += 'Tarikh: ' + tarikhDisplay(tarikh) + '\n';
-    msg += 'Hari: ' + String(hari || '').toUpperCase();
+    msg += '<b>KEMASKINI KETIDAKHADIRAN GURU</b>\n\n';
+    msg += '<b>Tarikh:</b> ' + tarikhDisplay(tarikh) + '\n';
+    msg += '<b>Hari:</b> ' + String(hari || '').toUpperCase();
 
     const sections = [];
     if (mc.length) sections.push(['MC / CRK / CTR', mc.map((x) => `• ${esc(x.nama)} - ${esc(x.kat)}`).join('\n')]);
@@ -181,7 +181,7 @@ export async function buildSnapshot({
     for (const [label, body] of sections) {
       msg += `\n\n\n<b>${label}</b>\n\n${body}`;
     }
-    msg += '\n\nKemaskini terakhir: ' + masaSekarangKL();
+    msg += '\n\n<b>Kemaskini terakhir:</b> ' + masaSekarangKL();
     return { text: msg, jumlahGuru: jumlah, hari, adaRekod: true };
   }
 
@@ -192,9 +192,9 @@ export async function buildSnapshot({
   //    • Program/Lain-lain: nama bernombor + catatan di baris bawah ("- ..").
   //    • Tiada masa/tempoh. Satu baris kosong antara blok.
   // ════════════════════════════════════════════════════════
-  const blocks = ['KEMASKINI KETIDAKHADIRAN GURU'];
-  blocks.push('Tarikh: ' + tarikhDisplay(tarikh));
-  blocks.push('Hari: ' + String(hari || '').toUpperCase());
+  const blocks = ['<b>KEMASKINI KETIDAKHADIRAN GURU</b>'];
+  blocks.push('<b>Tarikh:</b> ' + tarikhDisplay(tarikh));
+  blocks.push('<b>Hari:</b> ' + String(hari || '').toUpperCase());
 
   // MC, CRK, CTR — setiap satu tajuk sendiri, nama bernombor rapat
   for (const kat of MC_KATEGORI) {
@@ -215,7 +215,7 @@ export async function buildSnapshot({
   kumpulanBaharu('PROGRAM DI LUAR SEKOLAH', progLuar);
   kumpulanBaharu('LAIN-LAIN', lainLain);
 
-  blocks.push('Kemaskini terakhir: ' + (isAutoSnapshot ? autoLabel : masaSekarangKL()));
+  blocks.push('<b>Kemaskini terakhir:</b> ' + (isAutoSnapshot ? autoLabel : masaSekarangKL()));
 
   return { text: blocks.join('\n\n'), jumlahGuru: jumlah, hari, adaRekod: true };
 }
