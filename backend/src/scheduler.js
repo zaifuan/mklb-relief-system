@@ -1,33 +1,37 @@
 // ════════════════════════════════════════════════════════════
-//  scheduler.js — penjadual dalam-proses (FASA 7/9), TIADA dependency.
+//  scheduler.js — penjadual dalam-proses (FASA 7/9/10), TIADA dependency.
 //
-//  Semak setiap 60 saat. Jika tetapan DB:
-//    autoSnapshot = ON  DAN  jam KL SUDAH SAMPAI/LEPAS snapshotTime ("HH:MM")
-//    DAN belum dicetus hari ini (KL)
-//  → runMorningSnapshot() (langkau Sabtu/Ahad + dedup telegram_logs).
+//  Dua slot snapshot automatik (masa HARDCODE, ikut jam Asia/Kuala_Lumpur):
+//    • AUTO_MORNING — 05:30 → sasaran HARI INI
+//    • AUTO_EARLY   — 15:00 → sasaran ESOK (makluman sehari sebelum)
 //
-//  • Masa & ON/OFF dibaca dari DB (telegramSettings) — TIADA hardcode 5:30.
-//    Tukar tetapan terus berkesan tanpa restart.
-//  • DEFAULT autoSnapshot OFF → tiada apa dihantar sehingga admin aktifkan.
+//  Semak setiap 60 saat. Untuk SETIAP slot, jika:
+//    autoSnapshot ON  DAN  jam KL SUDAH SAMPAI/LEPAS masa slot
+//    DAN slot itu belum dicetus hari ini (KL)
+//  → jalankan runner slot. Weekend-skip (pada TARIKH SASARAN) + dedup
+//    telegram_logs per (jenis SNAPSHOT, triggerType slot, tarikh) diputus
+//    DI DALAM runner.
+//
+//  • ON/OFF dibaca dari DB (telegramSettings.autoSnapshot) — satu suis untuk
+//    kedua-dua slot. Masa di-HARDCODE (tiada setting baharu).
+//  • Gerbang "sampai/lepas masa + belum dicetus" (catch-up) — BUKAN padanan
+//    minit tepat — supaya snapshot tidak terlepas walau tick tersasar / backend
+//    di-restart merentasi minit sasaran / host tidur.
+//  • Kunci-cetus BERASINGAN per slot → AUTO_EARLY tidak menghalang AUTO_MORNING.
 //  • ENABLE_SCHEDULER=false → matikan ticker sepenuhnya (suis induk dev).
-//
-//  ── PEMBETULAN BUG 5:30 ──────────────────────────────────────
-//  Dahulu gerbang ialah padanan minit TEPAT (nowKLHHMM() === snapshotTime).
-//  Jika tick 60s terlepas minit 05:30 (drift setInterval, backend di-restart
-//  merentasi 05:30, atau host VPS tidur), snapshot TERUS terlepas sepanjang
-//  hari — tiada catch-up. (Realtime tidak terjejas kerana ia dicetus oleh
-//  permintaan HTTP, bukan timer.)
-//  Kini gerbang = "jam KL sudah sampai/lepas masa jadual DAN belum dicetus
-//  hari ini". Selagi backend hidup pada bila-bila masa pada/selepas masa
-//  jadual (hari bukan hujung minggu), snapshot dihantar SEKALI hari itu.
-//  Dedup DB (telegram_logs) tetap menjamin tiada mesej pendua.
 // ════════════════════════════════════════════════════════════
 
-import { runMorningSnapshot } from './services/telegramNotify.service.js';
-import { getTelegramSettings, snapshotMinit } from './lib/telegramSettings.js';
+import { runEarlySnapshot, runMorningSnapshot } from './services/telegramNotify.service.js';
+import { getTelegramSettings } from './lib/telegramSettings.js';
+
+// Slot automatik — masa HARDCODE (minit-dalam-hari, KL).
+const SLOTS = [
+  { nama: 'AUTO_MORNING', minit: 5 * 60 + 30, jalankan: runMorningSnapshot }, // 05:30 → hari ini
+  { nama: 'AUTO_EARLY', minit: 15 * 60, jalankan: runEarlySnapshot }, //          15:00 → esok
+];
 
 let timer = null;
-let lastFireKey = null; // "YYYY-MM-DD" (KL) — satu cetusan setiap hari
+const lastFire = {}; // { [slot]: "YYYY-MM-DD" (KL) } — satu cetusan setiap slot/hari
 
 // Jam:minit KL semasa "HH:MM" (untuk log sahaja)
 function nowKLHHMM() {
@@ -66,20 +70,18 @@ function todayKL() {
 async function tick() {
   try {
     const s = await getTelegramSettings();
-    if (!s.autoSnapshot) return; // OFF → tiada apa
+    if (!s.autoSnapshot) return; // OFF → kedua-dua slot mati; tiada tanda lastFire
 
     const today = todayKL();
-    if (lastFireKey === today) return; // sudah dicetus hari ini (proses ini)
+    const nowMin = nowKLMinit();
 
-    // Catch-up: cetus sebaik jam KL sampai/lepas masa jadual (bukan minit tepat).
-    if (nowKLMinit() < snapshotMinit(s.snapshotTime)) return; // belum tiba masa
-
-    lastFireKey = today; // tandakan SEBELUM hantar — elak cetus berganda seminit
-    const res = await runMorningSnapshot();
-    console.log(
-      `[scheduler] cetus snapshot auto — KL ${nowKLHHMM()} (jadual ${s.snapshotTime}):`,
-      JSON.stringify(res)
-    );
+    for (const slot of SLOTS) {
+      if (lastFire[slot.nama] === today) continue; // slot ini sudah dicetus hari ini
+      if (nowMin < slot.minit) continue; // belum sampai masa slot (catch-up bila lewat)
+      lastFire[slot.nama] = today; // tanda SEBELUM hantar — elak cetus berganda
+      const res = await slot.jalankan();
+      console.log(`[scheduler] cetus ${slot.nama} — KL ${nowKLHHMM()}:`, JSON.stringify(res));
+    }
   } catch (e) {
     console.error('[scheduler] tick ERROR:', e.message);
   }
@@ -94,8 +96,8 @@ export function startScheduler() {
   timer = setInterval(tick, 60 * 1000); // semak setiap 60 saat
   if (timer.unref) timer.unref();
   console.log(
-    '[scheduler] aktif — semak tetapan Telegram DB setiap 60 saat ' +
-      '(catch-up pada/lepas masa jadual; default auto OFF).'
+    '[scheduler] aktif — AUTO_MORNING 05:30 (hari ini) + AUTO_EARLY 15:00 (esok), ' +
+      'catch-up; default auto OFF.'
   );
 }
 

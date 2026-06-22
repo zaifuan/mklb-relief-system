@@ -320,17 +320,27 @@ export async function createAbsence(req, res) {
       ip: getClientIp(req),
     });
 
-    // ── Telegram realtime — resend snapshot PENUH; sekali sahaja per tarikh ──
-    const _seenTarikhRT = new Set();
-    for (const rec of rekodBaharu) {
-      const key = rec.tarikh instanceof Date ? rec.tarikh.toISOString().slice(0, 10) : String(rec.tarikh);
-      if (_seenTarikhRT.has(key)) continue;
-      _seenTarikhRT.add(key);
+    // ── Telegram realtime — HANYA untuk tarikh AKTIF TERAWAL dalam submit ini ──
+    //  Satu submit (walau banyak tarikh) → SATU snapshot PENUH sahaja, iaitu tarikh
+    //  paling awal yang berada dalam window realtimenya sekarang. Tarikh lain akan
+    //  dihantar oleh AUTO_EARLY/AUTO_MORNING pada giliran tarikh masing-masing.
+    //  Cuba tarikh menaik: yang di luar window dilangkau gerbang (skipped:'GATE')
+    //  → teruskan; tarikh PERTAMA yang lulus gerbang → hantar & berhenti.
+    const _rtKey = (r) =>
+      r.tarikh instanceof Date ? r.tarikh.toISOString().slice(0, 10) : String(r.tarikh);
+    const tarikhUnikMenaik = [...new Set(rekodBaharu.map(_rtKey))].sort(); // "YYYY-MM-DD" menaik
+
+    for (const key of tarikhUnikMenaik) {
+      const rec = rekodBaharu.find((r) => _rtKey(r) === key);
+      let res;
       try {
-        await sendRealtime(rec, { ip: getClientIp(req) });
+        res = await sendRealtime(rec, { ip: getClientIp(req) });
       } catch (e) {
         console.error('sendRealtime (createAbsence) ERROR:', e.message);
+        break; // ralat tak dijangka → jangan cuba tarikh lain
       }
+      // Lulus window (cuba dihantar) → berhenti. Di luar window (GATE) → cuba tarikh seterusnya.
+      if (!(res && res.skipped && res.reason === 'GATE')) break;
     }
 
     const dicipta = references.length;
