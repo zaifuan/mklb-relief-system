@@ -20,6 +20,16 @@ import { masaKeMinitAuto, HUJUNG_HARI } from '../lib/absenceWindow.js';
 
 const MC_KATEGORI = ['MC', 'CRK', 'CTR'];
 
+// Escape HTML entities untuk teks dinamik (parse_mode HTML Telegram).
+// Nama guru & catatan mungkin mengandungi &, <, >, " — mesti diescape.
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 export function tarikhKeUtcDate(tarikhStr) {
   const m = String(tarikhStr || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return null;
@@ -91,9 +101,9 @@ function renderKumpulan(records) {
   return order
     .map((key) => {
       const g = map.get(key);
-      let b = g.nama.map((n) => `• ${n}`).join('\n');
+      let b = g.nama.map((n) => `• ${esc(n)}`).join('\n');
       b += `\n\n${masaLabel(g.jenis, g.masaMula, g.masaTamat)}`;
-      if (g.catatan) b += `\n\nCatatan: ${g.catatan}`;
+      if (g.catatan) b += `\n\nCatatan: <i>${esc(g.catatan)}</i>`;
       return b;
     })
     .join('\n\n'); // pisah kumpulan berbeza dalam kategori sama
@@ -163,13 +173,13 @@ export async function buildSnapshot({
     msg += 'Hari: ' + String(hari || '').toUpperCase();
 
     const sections = [];
-    if (mc.length) sections.push(['MC / CRK / CTR', mc.map((x) => `• ${x.nama} - ${x.kat}`).join('\n')]);
+    if (mc.length) sections.push(['MC / CRK / CTR', mc.map((x) => `• ${esc(x.nama)} - ${esc(x.kat)}`).join('\n')]);
     if (progSekolah.length) sections.push(['PROGRAM DI SEKOLAH', renderKumpulan(progSekolah)]);
     if (progLuar.length) sections.push(['PROGRAM DI LUAR SEKOLAH', renderKumpulan(progLuar)]);
     if (lainLain.length) sections.push(['LAIN-LAIN', renderKumpulan(lainLain)]);
 
     for (const [label, body] of sections) {
-      msg += `\n\n\n${label}\n\n${body}`;
+      msg += `\n\n\n<b>${label}</b>\n\n${body}`;
     }
     msg += '\n\nKemaskini terakhir: ' + masaSekarangKL();
     return { text: msg, jumlahGuru: jumlah, hari, adaRekod: true };
@@ -190,16 +200,16 @@ export async function buildSnapshot({
   for (const kat of MC_KATEGORI) {
     const namaList = byKat[kat];
     if (!namaList.length) continue;
-    blocks.push(kat + '\n\n' + namaList.map((n, i) => `${i + 1}. ${n}`).join('\n'));
+    blocks.push(`<b>${kat}</b>` + '\n\n' + namaList.map((n, i) => `${i + 1}. ${esc(n)}`).join('\n'));
   }
 
   // Program/Lain-lain — nama bernombor + catatan ("- ..") di bawah
   const kumpulanBaharu = (label, arr) => {
     if (!arr.length) return;
     const body = arr
-      .map((e, i) => (e.catatan ? `${i + 1}. ${e.nama}\n\n- ${e.catatan}` : `${i + 1}. ${e.nama}`))
+      .map((e, i) => (e.catatan ? `${i + 1}. ${esc(e.nama)}\n\n- <i>${esc(e.catatan)}</i>` : `${i + 1}. ${esc(e.nama)}`))
       .join('\n\n');
-    blocks.push(label + '\n\n' + body);
+    blocks.push(`<b>${label}</b>` + '\n\n' + body);
   };
   kumpulanBaharu('PROGRAM DI SEKOLAH', progSekolah);
   kumpulanBaharu('PROGRAM DI LUAR SEKOLAH', progLuar);
