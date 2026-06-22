@@ -7,6 +7,17 @@
 //    • MC/CRK/CTR : "• Nama - JENIS" (tiada detail).
 //    • Program/Lain-lain : rekod dgn (jenis+masa+catatan) SAMA dikumpul →
 //        senarai nama bullet, baris (masa), baris "Catatan: …".
+//
+//  Format baharu (snapshot biasa/auto/realtime) — penambahbaikan grouping:
+//    • Setiap kategori (termasuk MC/CRK/CTR) ada senarai nama BERNOMBOR,
+//      nombor berterusan dalam kategori tersebut (mulai dari 1).
+//    • Dalam kategori utama yang sama, nama guru dikumpulkan lagi ikut
+//      catatan/sebabDetail yang SAMA.
+//    • Catatan sama → semua nama bernombor dulu, kemudian catatan sekali
+//      di bawah ("- <i>...</i>"). Tidak berulang.
+//    • Catatan berbeza → kumpulan berbeza dalam kategori yang sama (nombor
+//      tetap berterusan merentas kumpulan dalam kategori tersebut).
+//    • Catatan kosong → nama bernombor sahaja, tanpa tanda dash/Catatan:.
 //    • Masa : SEPANJANG_HARI → "(Sehari Penuh)";
 //             SEPARUH_HARI   → "(7:30 pagi - tamat sekolah)".
 //    • Header manual "KEMASKINI KETIDAKHADIRAN GURU" / auto "KETIDAKHADIRAN
@@ -203,12 +214,56 @@ export async function buildSnapshot({
     blocks.push(`<b>${kat}</b>` + '\n\n' + namaList.map((n, i) => `${i + 1}. ${esc(n)}`).join('\n'));
   }
 
-  // Program/Lain-lain — nama bernombor + catatan ("- ..") di bawah
+  // Program/Lain-lain — nama BERNOMBOR dikumpulkan ikut catatan yang SAMA.
+  //    • Nombor berterusan dalam sesebuah kategori (1, 2, 3 …) merentas
+  //      kumpulan catatan.
+  //    • Catatan sama  → nama bernombor dulu, kemudian catatan sekali:
+  //        1. NAMA
+  //        2. NAMA
+  //        - <i>catatan</i>
+  //    • Catatan berbeza → kumpulan berasingan dalam kategori sama, nombor
+  //      disambung dari kumpulan sebelumnya.
+  //    • Catatan kosong  → nama bernombor sahaja, tanpa dash/"Catatan:".
   const kumpulanBaharu = (label, arr) => {
     if (!arr.length) return;
-    const body = arr
-      .map((e, i) => (e.catatan ? `${i + 1}. ${esc(e.nama)}\n\n- <i>${esc(e.catatan)}</i>` : `${i + 1}. ${esc(e.nama)}`))
+
+    // Susun ikut catatan supaya kumpulan yang sama berdekatan. Catatan kosong
+    // diletakkan dahulu agar nama tanpa catatan muncul sebelum kumpulan
+    // berlabel dalam kategori yang sama.
+    const susun = [...arr].sort((a, b) => {
+      const ca = a.catatan || '';
+      const cb = b.catatan || '';
+      if (ca === cb) return a.nama.localeCompare(b.nama);
+      if (!ca) return -1;
+      if (!cb) return 1;
+      return ca.localeCompare(cb);
+    });
+
+    // Kumpulkan nama ikut catatan (dedup nama dalam kumpulan sama).
+    const orderCat = [];
+    const mapCat = new Map();
+    for (const e of susun) {
+      const key = e.catatan || '';
+      if (!mapCat.has(key)) {
+        mapCat.set(key, { catatan: e.catatan, nama: [] });
+        orderCat.push(key);
+      }
+      const g = mapCat.get(key);
+      if (!g.nama.includes(e.nama)) g.nama.push(e.nama);
+    }
+
+    // Bina blok setiap kumpulan. Nombor berterusan dalam kategori ini,
+    // bermula dari 1. Nama guru kekal normal (bukan bold/italic).
+    let no = 0;
+    const body = orderCat
+      .map((key) => {
+        const g = mapCat.get(key);
+        const namaBlock = g.nama.map((n) => `${++no}. ${esc(n)}`).join('\n');
+        if (!g.catatan) return namaBlock;
+        return `${namaBlock}\n\n- <i>${esc(g.catatan)}</i>`;
+      })
       .join('\n\n');
+
     blocks.push(`<b>${label}</b>` + '\n\n' + body);
   };
   kumpulanBaharu('PROGRAM DI SEKOLAH', progSekolah);
