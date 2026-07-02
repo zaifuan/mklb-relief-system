@@ -48,6 +48,25 @@ function todayStr() {
     return new Date().toISOString().slice(0, 10);
   }
 }
+// Senarai tarikh (YYYY-MM-DD) dalam julat [mula, tamat] — untuk pemilih "tarikh
+// pertukaran" apabila cuti lebih daripada satu hari.
+function julatTarikh(mula, tamat) {
+  if (!mula) return [];
+  const t = tamat || mula;
+  if (t < mula) return [mula];
+  const [y1, m1, d1] = mula.split('-').map(Number);
+  const [y2, m2, d2] = t.split('-').map(Number);
+  const start = Date.UTC(y1, m1 - 1, d1);
+  const end = Date.UTC(y2, m2 - 1, d2);
+  const out = [];
+  for (let cur = start; cur <= end; cur += 86400000) {
+    const d = new Date(cur);
+    out.push(
+      `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+    );
+  }
+  return out;
+}
 
 export default function Page() {
   const [opts, setOpts] = useState(null);
@@ -95,10 +114,12 @@ export default function Page() {
 
   // ── Pertukaran Kelas (Suka Sama Suka) ──
   const [adaPertukaran, setAdaPertukaran] = useState(false); // false = "Tidak", true = "Ya"
-  const [jadualSlots, setJadualSlots] = useState([]); // slot mengajar guru pada hari itu
+  const [jadualSlots, setJadualSlots] = useState([]); // slot mengajar guru pada tarikh dipilih
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [slotsError, setSlotsError] = useState('');
-  const [swapPick, setSwapPick] = useState({}); // { [scheduleId]: { checked, guruGanti } }
+  const [swapPick, setSwapPick] = useState({}); // { [scheduleId]: { checked, guruGanti } } — tarikh semasa dipilih
+  const [swapTarikh, setSwapTarikh] = useState(''); // tarikh pertukaran dipilih (untuk cuti > 1 hari)
+  const [swapItems, setSwapItems] = useState([]); // senarai pertukaran terkumpul merentasi tarikh { tarikh, scheduleId, slot, kelas, masa, subjek, guruGanti }
 
   useEffect(() => {
     api
@@ -111,16 +132,21 @@ export default function Page() {
   const perluDetail = !!opts?.sebabPerluDetail?.includes(form.sebab);
   const separuh = form.jenis === 'SEPARUH_HARI';
 
-  // Pertukaran kelas hanya untuk mod Individu + SATU hari (selaras backend).
-  const bolehSwap =
-    mode === 'individu' &&
-    !!form.guruNama &&
-    !!form.tarikhMula &&
-    (!form.tarikhTamat || form.tarikhTamat === form.tarikhMula);
+  // Pertukaran kelas — mod Individu sahaja (kumpulan tetap tidak boleh swap).
+  // Tarikh tamat == tarikh mula (cuti 1 hari) DIBENARKAN, dan tarikh tamat > tarikh
+  // mula (cuti > 1 hari) kini turut DIBENARKAN — guru pilih tarikh pertukaran sendiri.
+  const bolehSwap = mode === 'individu' && !!form.guruNama && !!form.tarikhMula;
+  // Cuti lebih daripada satu hari → perlukan pemilih "tarikh pertukaran" berasingan.
+  const multiHari = bolehSwap && !!form.tarikhTamat && form.tarikhTamat !== form.tarikhMula;
+  // Tarikh yang jadual sepatutnya dimuat untuk: 1 hari → tarikh cuti itu sendiri;
+  // > 1 hari → tarikh pertukaran yang guru pilih dalam julat cuti.
+  const swapTarikhEfektif = multiHari ? swapTarikh : form.tarikhMula;
+  const julatTarikhCuti = multiHari ? julatTarikh(form.tarikhMula, form.tarikhTamat) : [];
 
-  // Muat jadual mengajar guru pada hari dipilih bila "Ya" ditekan.
+  // Muat jadual mengajar guru pada tarikh berkenaan bila "Ya" ditekan (atau bila
+  // tarikh pertukaran ditukar, untuk kes cuti > 1 hari).
   useEffect(() => {
-    if (!bolehSwap || !adaPertukaran) {
+    if (!bolehSwap || !adaPertukaran || !swapTarikhEfektif) {
       setJadualSlots([]);
       setSlotsError('');
       return;
@@ -129,7 +155,7 @@ export default function Page() {
     setSlotsLoading(true);
     setSlotsError('');
     api
-      .schedule(form.guruNama, form.tarikhMula)
+      .schedule(form.guruNama, swapTarikhEfektif)
       .then((d) => {
         if (!cancel) setJadualSlots(d.slots || []);
       })
@@ -142,7 +168,23 @@ export default function Page() {
     return () => {
       cancel = true;
     };
-  }, [bolehSwap, adaPertukaran, form.guruNama, form.tarikhMula]);
+  }, [bolehSwap, adaPertukaran, form.guruNama, swapTarikhEfektif]);
+
+  // Tarikh pertukaran ditukar → pilihan slot tarikh sebelumnya tidak lagi relevan.
+  useEffect(() => {
+    setSwapPick({});
+  }, [swapTarikhEfektif]);
+
+  // Guru, tarikh mula/tamat, atau mod berubah → data pertukaran lama tidak sah lagi.
+  useEffect(() => {
+    setAdaPertukaran(false);
+    setJadualSlots([]);
+    setSwapPick({});
+    setSwapItems([]);
+    setSwapTarikh('');
+    setSlotsError('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.guruNama, form.tarikhMula, form.tarikhTamat, mode]);
 
   function set(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -154,6 +196,42 @@ export default function Page() {
   }
   function buangGuru(nama) {
     setGuruList((list) => list.filter((n) => n !== nama));
+  }
+
+  // Tambah slot yang ditanda (untuk tarikh pertukaran semasa) ke senarai pertukaran
+  // terkumpul — dibenarkan untuk kes cuti > 1 hari supaya guru boleh ulang bagi
+  // beberapa tarikh berlainan dalam julat cuti.
+  function tambahPertukaran() {
+    if (!swapTarikh) {
+      setSlotsError('Sila pilih tarikh pertukaran dahulu.');
+      return;
+    }
+    const dipilih = jadualSlots.filter((s) => swapPick[s.scheduleId]?.checked);
+    if (!dipilih.length) return;
+    if (dipilih.some((s) => !swapPick[s.scheduleId]?.guruGanti)) {
+      setSlotsError('Sila pilih guru ambil alih untuk setiap slot yang ditanda.');
+      return;
+    }
+    setSwapItems((items) => {
+      const tanpaLama = items.filter(
+        (it) => !(it.tarikh === swapTarikh && dipilih.some((s) => s.scheduleId === it.scheduleId))
+      );
+      const baru = dipilih.map((s) => ({
+        tarikh: swapTarikh,
+        scheduleId: s.scheduleId,
+        slot: s.slot || undefined,
+        kelas: s.kelas,
+        masa: s.masa,
+        subjek: s.subjek || undefined,
+        guruGanti: swapPick[s.scheduleId].guruGanti,
+      }));
+      return [...tanpaLama, ...baru];
+    });
+    setSwapPick({});
+    setSlotsError('');
+  }
+  function buangPertukaran(tarikh, scheduleId) {
+    setSwapItems((items) => items.filter((it) => !(it.tarikh === tarikh && it.scheduleId === scheduleId)));
   }
 
   const labelSebab = (v) => opts?.sebab?.find((s) => s.value === v)?.label || v;
@@ -279,24 +357,41 @@ export default function Page() {
     setError('');
     setSubmitting(true);
     try {
-      // Pertukaran kelas — hanya mod Individu + SATU hari (selaras backend).
+      // Pertukaran kelas — mod Individu sahaja. Cuti 1 hari: guna swapPick terus
+      // (behaviour lama, tarikh = tarikhMula). Cuti > 1 hari: guna senarai swapItems
+      // yang telah dikumpul merentasi tarikh dipilih.
       let pertukaran;
       if (bolehSwap && adaPertukaran) {
-        const dipilih = jadualSlots.filter((s) => swapPick[s.scheduleId]?.checked);
-        if (dipilih.some((s) => !swapPick[s.scheduleId]?.guruGanti)) {
-          setError('Sila pilih guru ambil alih untuk setiap slot yang ditanda.');
-          setSubmitting(false);
-          return;
+        if (multiHari) {
+          if (swapItems.length) {
+            pertukaran = swapItems.map((it) => ({
+              tarikh: it.tarikh,
+              scheduleId: it.scheduleId,
+              slot: it.slot,
+              kelas: it.kelas,
+              masa: it.masa,
+              subjek: it.subjek,
+              guruGanti: it.guruGanti,
+            }));
+          }
+        } else {
+          const dipilih = jadualSlots.filter((s) => swapPick[s.scheduleId]?.checked);
+          if (dipilih.some((s) => !swapPick[s.scheduleId]?.guruGanti)) {
+            setError('Sila pilih guru ambil alih untuk setiap slot yang ditanda.');
+            setSubmitting(false);
+            return;
+          }
+          pertukaran = dipilih.map((s) => ({
+            tarikh: form.tarikhMula,
+            scheduleId: s.scheduleId,
+            slot: s.slot || undefined,
+            kelas: s.kelas,
+            masa: s.masa,
+            subjek: s.subjek || undefined,
+            guruGanti: swapPick[s.scheduleId].guruGanti,
+          }));
+          if (!pertukaran.length) pertukaran = undefined;
         }
-        pertukaran = dipilih.map((s) => ({
-          scheduleId: s.scheduleId,
-          slot: s.slot || undefined,
-          kelas: s.kelas,
-          masa: s.masa,
-          subjek: s.subjek || undefined,
-          guruGanti: swapPick[s.scheduleId].guruGanti,
-        }));
-        if (!pertukaran.length) pertukaran = undefined;
       }
 
       const payload = {
@@ -329,6 +424,8 @@ export default function Page() {
     setJadualSlots([]);
     setSwapPick({});
     setSlotsError('');
+    setSwapItems([]);
+    setSwapTarikh('');
   }
 
   return (
@@ -634,7 +731,7 @@ export default function Page() {
               onChange={(e) => set('catatan', e.target.value)}
             />
 
-            {/* Pertukaran Kelas (Suka Sama Suka) — Individu + satu hari sahaja */}
+            {/* Pertukaran Kelas (Suka Sama Suka) — mod Individu (cuti 1 hari atau > 1 hari) */}
             {bolehSwap && (
               <div className="swapBox">
                 <span className="lbl">Pertukaran Kelas (Suka Sama Suka)</span>
@@ -662,62 +759,107 @@ export default function Page() {
 
                 {adaPertukaran && (
                   <div className="swapList">
-                    {slotsLoading ? (
-                      <p className="swapMuted">Memuat jadual…</p>
-                    ) : slotsError ? (
-                      <div className="alert" role="alert">{slotsError}</div>
-                    ) : jadualSlots.length === 0 ? (
-                      <p className="swapMuted">Tiada slot mengajar untuk guru/tarikh ini.</p>
-                    ) : (
-                      jadualSlots.map((s) => {
-                        const pick = swapPick[s.scheduleId] || {};
-                        return (
-                          <div className="swapRow" key={s.scheduleId}>
-                            <label className="swapSlot">
-                              <input
-                                type="checkbox"
-                                checked={!!pick.checked}
-                                onChange={(e) =>
-                                  setSwapPick((p) => ({
-                                    ...p,
-                                    [s.scheduleId]: { ...p[s.scheduleId], checked: e.target.checked },
-                                  }))
-                                }
-                              />
-                              <span className="swapSlotTxt">
-                                {s.slot ? `Slot ${s.slot}` : 'Slot'} | {s.kelas} | {s.subjek || '-'}
-                                <span className="swapMasa"> ({s.masa})</span>
+                    {multiHari && (
+                      <>
+                        <label className="lbl" htmlFor="swapTarikh">Tarikh pertukaran</label>
+                        <select
+                          id="swapTarikh"
+                          className="inp"
+                          value={swapTarikh}
+                          onChange={(e) => setSwapTarikh(e.target.value)}
+                        >
+                          <option value="">Pilih tarikh dalam julat cuti…</option>
+                          {julatTarikhCuti.map((t) => (
+                            <option key={t} value={t}>{fmtTarikh(t)}</option>
+                          ))}
+                        </select>
+
+                        {swapItems.length > 0 && (
+                          <div className="chips">
+                            {swapItems.map((it) => (
+                              <span className="chip" key={`${it.tarikh}-${it.scheduleId}`}>
+                                {fmtTarikh(it.tarikh)} · {it.slot ? `Slot ${it.slot}` : 'Slot'} · {it.kelas} → {it.guruGanti}
+                                <button
+                                  type="button"
+                                  className="chipX"
+                                  onClick={() => buangPertukaran(it.tarikh, it.scheduleId)}
+                                  aria-label={`Buang pertukaran ${fmtTarikh(it.tarikh)} ${it.kelas}`}
+                                >
+                                  ×
+                                </button>
                               </span>
-                            </label>
-                            {pick.checked && (
-                              <select
-                                className="inp"
-                                value={pick.guruGanti || ''}
-                                onChange={(e) =>
-                                  setSwapPick((p) => ({
-                                    ...p,
-                                    [s.scheduleId]: { ...p[s.scheduleId], guruGanti: e.target.value },
-                                  }))
-                                }
-                              >
-                                <option value="">Pilih guru ambil alih…</option>
-                                {opts?.teachers
-                                  ?.filter((t) => t.nama !== form.guruNama)
-                                  .map((t) => (
-                                    <option key={t.id} value={t.nama}>
-                                      {t.nama}
-                                    </option>
-                                  ))}
-                              </select>
-                            )}
+                            ))}
                           </div>
-                        );
-                      })
+                        )}
+                      </>
+                    )}
+
+                    {(!multiHari || swapTarikh) && (
+                      <>
+                        {slotsLoading ? (
+                          <p className="swapMuted">Memuat jadual…</p>
+                        ) : slotsError ? (
+                          <div className="alert" role="alert">{slotsError}</div>
+                        ) : jadualSlots.length === 0 ? (
+                          <p className="swapMuted">Tiada slot mengajar untuk guru/tarikh ini.</p>
+                        ) : (
+                          jadualSlots.map((s) => {
+                            const pick = swapPick[s.scheduleId] || {};
+                            return (
+                              <div className="swapRow" key={s.scheduleId}>
+                                <label className="swapSlot">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!pick.checked}
+                                    onChange={(e) =>
+                                      setSwapPick((p) => ({
+                                        ...p,
+                                        [s.scheduleId]: { ...p[s.scheduleId], checked: e.target.checked },
+                                      }))
+                                    }
+                                  />
+                                  <span className="swapSlotTxt">
+                                    {s.slot ? `Slot ${s.slot}` : 'Slot'} | {s.kelas} | {s.subjek || '-'}
+                                    <span className="swapMasa"> ({s.masa})</span>
+                                  </span>
+                                </label>
+                                {pick.checked && (
+                                  <select
+                                    className="inp"
+                                    value={pick.guruGanti || ''}
+                                    onChange={(e) =>
+                                      setSwapPick((p) => ({
+                                        ...p,
+                                        [s.scheduleId]: { ...p[s.scheduleId], guruGanti: e.target.value },
+                                      }))
+                                    }
+                                  >
+                                    <option value="">Pilih guru ambil alih…</option>
+                                    {opts?.teachers
+                                      ?.filter((t) => t.nama !== form.guruNama)
+                                      .map((t) => (
+                                        <option key={t.id} value={t.nama}>
+                                          {t.nama}
+                                        </option>
+                                      ))}
+                                  </select>
+                                )}
+                              </div>
+                            );
+                          })
+                        )}
+                        {multiHari && jadualSlots.length > 0 && (
+                          <button type="button" className="btn ghost full" onClick={tambahPertukaran}>
+                            Tambah ke Senarai Pertukaran
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 )}
               </div>
             )}
+
 
             {error && <div className="alert" role="alert" aria-live="assertive">{error}</div>}
 

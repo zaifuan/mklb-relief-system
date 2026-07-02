@@ -32,12 +32,15 @@ const createSchema = z
     masaMula: z.string().optional(),
     masaTamat: z.string().optional(),
     catatan: z.string().optional(),
-    // Pertukaran Kelas (Suka Sama Suka) — hanya diproses untuk hantar SATU guru × SATU hari.
+    // Pertukaran Kelas (Suka Sama Suka) — hanya diproses untuk hantar SATU guru
+    // individu. Boleh merentasi >1 hari; setiap item boleh bawa `tarikh` sendiri
+    // untuk menentukan rekod ketidakhadiran mana ia tergolong.
     pertukaran: z
       .array(
         z.object({
           scheduleId: z.number().int().optional(),
           slot: z.string().optional(),
+          tarikh: z.string().regex(DATE_RE, 'Tarikh pertukaran tidak sah').optional(),
           kelas: z.string().min(1),
           masa: z.string().min(1),
           subjek: z.string().optional(),
@@ -209,10 +212,13 @@ export async function createAbsence(req, res) {
     let dilangkau = 0; // (guru, tarikh) yang sudah ada rekod AKTIF
 
     // ── Pertukaran Kelas (Suka Sama Suka) — disediakan untuk simpanan ATOMIK ──
-    // Hanya untuk hantar SATU guru × SATU hari (selaras UI borang). Resolusi ID
-    // guru ganti dibuat sekali di sini; baris class_swaps dicipta DALAM transaksi
-    // yang SAMA dengan absenceRecord supaya kedua-duanya atomik (semua-atau-tiada).
-    const wantSwaps = !!(parsed.data.pertukaran?.length && namaList.length === 1 && jumlahHari === 1);
+    // Hanya untuk hantar SATU guru individu (selaras UI borang); kini boleh
+    // merentasi >1 hari. Setiap item pertukaran ditapis mengikut tarikh rekod
+    // ketidakhadiran semasa di dalam gelung di bawah (lihat swapForTarikh).
+    // Resolusi ID guru ganti dibuat sekali di sini; baris class_swaps dicipta
+    // DALAM transaksi yang SAMA dengan absenceRecord supaya kedua-duanya atomik
+    // (semua-atau-tiada).
+    const wantSwaps = !!(parsed.data.pertukaran?.length && namaList.length === 1);
     let gantiIdMap = new Map();
     let swapInput = [];
     if (wantSwaps) {
@@ -233,6 +239,7 @@ export async function createAbsence(req, res) {
       for (let cur = startMs; cur <= endMs; cur += MS_HARI) {
         const tarikhDate = new Date(cur);
         const hari = hariDari(tarikhDate);
+        const tarikhKey = tarikhDate.toISOString().slice(0, 10); // YYYY-MM-DD (UTC, sepadan mulaStr/tamatStr)
 
         // Dedup: guru sama + tarikh sama + masih AKTIF (belum dipadam) → langkau
         const sediaAda = await prisma.absenceRecord.findFirst({
@@ -243,6 +250,13 @@ export async function createAbsence(req, res) {
           dilangkau++;
           continue;
         }
+
+        // Pertukaran khusus untuk tarikh rekod SEMASA sahaja — elak cipta swap sama
+        // untuk semua hari dalam julat. `p.tarikh` diutamakan; jika tiada (borang
+        // lama / kes satu hari), anggap ia tarikh mula (serasi-belakang).
+        const swapForTarikh = wantSwaps
+          ? swapInput.filter((p) => (p.tarikh ? p.tarikh === tarikhKey : jumlahHari === 1 && tarikhKey === mulaStr))
+          : [];
 
         // Jana reference + simpan dalam transaction; cuba semula sekali jika reference bertembung.
         // Pertukaran kelas dicipta DALAM transaksi yang SAMA → atomik dengan rekod.
@@ -269,9 +283,9 @@ export async function createAbsence(req, res) {
               });
 
               // Pertukaran kelas — ATOMIK (rollback bersama rekod jika gagal).
-              if (wantSwaps && swapInput.length) {
+              if (swapForTarikh.length) {
                 await tx.classSwap.createMany({
-                  data: swapInput.map((p) => ({
+                  data: swapForTarikh.map((p) => ({
                     absenceRecordId: rec.id,
                     guruAsal: rec.guruNama,
                     guruGanti: String(p.guruGanti).trim(),
