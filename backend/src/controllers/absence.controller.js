@@ -16,6 +16,7 @@ import {
 import { hariDari, generateReference } from '../lib/absenceUtil.js';
 import { masaKeMinitAuto } from '../lib/absenceWindow.js';
 import { normalkanMasa } from '../lib/timeUtil.js';
+import { resolveWantSwaps } from '../lib/absenceRules.js';
 import { sendRealtime, sendPembatalan } from '../services/telegramNotify.service.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -32,6 +33,9 @@ const createSchema = z
     masaMula: z.string().optional(),
     masaTamat: z.string().optional(),
     catatan: z.string().optional(),
+    // Keperluan relief kelas — BAHARU. Optional + default(true) supaya payload
+    // lama (tanpa medan ini) terus tersimpan perluGanti=true seperti sebelum ini.
+    perluGanti: z.boolean().default(true),
     // Pertukaran Kelas (Suka Sama Suka) — hanya diproses untuk hantar SATU guru
     // individu. Boleh merentasi >1 hari; setiap item boleh bawa `tarikh` sendiri
     // untuk menentukan rekod ketidakhadiran mana ia tergolong.
@@ -148,7 +152,7 @@ export async function createAbsence(req, res) {
   }
 
   try {
-    const { guruNama, guruNamaList, sebab, jenis, masaMula, masaTamat, catatan } = parsed.data;
+    const { guruNama, guruNamaList, sebab, jenis, masaMula, masaTamat, catatan, perluGanti } = parsed.data;
     const mulaStr = parsed.data.tarikhMula || parsed.data.tarikh;
     const tamatStr = parsed.data.tarikhTamat || mulaStr;
 
@@ -218,7 +222,11 @@ export async function createAbsence(req, res) {
     // Resolusi ID guru ganti dibuat sekali di sini; baris class_swaps dicipta
     // DALAM transaksi yang SAMA dengan absenceRecord supaya kedua-duanya atomik
     // (semua-atau-tiada).
-    const wantSwaps = !!(parsed.data.pertukaran?.length && namaList.length === 1);
+    const wantSwaps = resolveWantSwaps({
+      pertukaranLength: parsed.data.pertukaran?.length || 0,
+      jumlahGuru: namaList.length,
+      perluGanti,
+    });
     let gantiIdMap = new Map();
     let swapInput = [];
     if (wantSwaps) {
@@ -275,6 +283,7 @@ export async function createAbsence(req, res) {
                   jenis,
                   masaMula: jenis === 'SEPARUH_HARI' ? masaMula.trim() : null,
                   masaTamat: jenis === 'SEPARUH_HARI' ? masaTamat?.trim() || null : null,
+                  perluGanti,
                   statusBorang: 'AKTIF',
                   submittedBy: guru.nama,
                   reference,

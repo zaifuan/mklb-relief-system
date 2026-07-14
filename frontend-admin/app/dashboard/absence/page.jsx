@@ -274,6 +274,7 @@ export default function AbsenceDashboard() {
                       <td className="nameCell">
                         {r.guruNama}
                         {r.groupReference && <span className="badge grp">KUMPULAN</span>}
+                        {r.perluGanti === false && <span className="badge noRelief">Kelas tidak perlu relief</span>}
                       </td>
                       <td>{sebabLabel(r.sebabKategori)}</td>
                       <td className="catatanCell">{r.sebabDetail || '—'}</td>
@@ -304,6 +305,9 @@ export default function AbsenceDashboard() {
               <div><dt>Jenis</dt><dd>{jenisLabel(selected.jenis)}{selected.masaMula ? ` — ${selected.masaMula} hingga ${selected.masaTamat || 'tamat sekolah'}` : ''}</dd></div>
               <div><dt>Catatan</dt><dd>{selected.sebabDetail || '—'}</dd></div>
               <div><dt>Status</dt><dd><span className={`badge ${selected.statusBorang.toLowerCase()}`}>{STATUS_LABEL[selected.statusBorang]}</span></dd></div>
+              {selected.perluGanti === false && (
+                <div><dt>Keperluan relief</dt><dd><span className="badge noRelief">Kelas tidak perlu relief</span></dd></div>
+              )}
               {selected.groupReference && (
                 <div><dt>Jenis rekod</dt><dd><span className="badge grp">KUMPULAN</span></dd></div>
               )}
@@ -425,6 +429,7 @@ export default function AbsenceDashboard() {
         .badge.dibatalkan { color: #b42318; background: #fef3f2; border: 1px solid #fcd2cd; }
         .badge.selesai { color: #1d4ed8; background: #eaf0fe; border: 1px solid #cdddfb; }
         .badge.grp { margin-left: 8px; color: #8a6d12; background: #faf3df; border: 1px solid #ecdcae; font-size: 10.5px; letter-spacing: .03em; }
+        .badge.noRelief { margin-left: 8px; color: #475569; background: #f1f5f9; border: 1px solid #dbe3ea; font-size: 10.5px; letter-spacing: .03em; }
         .overlay { position: fixed; inset: 0; background: rgba(15,42,35,0.4); display: grid; place-items: center; padding: 16px; z-index: 50; }
         .modal { width: 100%; max-width: 440px; background: #fff; border-radius: 16px; padding: 20px; max-height: 88vh; overflow-y: auto; }
         .mHead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }

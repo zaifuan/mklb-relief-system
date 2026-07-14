@@ -82,6 +82,7 @@ export default function Page() {
     masaMula: '',
     masaTamat: '',
     catatan: '',
+    perluGanti: true, // Keperluan relief kelas — default "Kelas perlu relief"
   });
   // Mod individu / kumpulan
   const [mode, setMode] = useState('individu'); // 'individu' | 'kumpulan'
@@ -132,10 +133,12 @@ export default function Page() {
   const perluDetail = !!opts?.sebabPerluDetail?.includes(form.sebab);
   const separuh = form.jenis === 'SEPARUH_HARI';
 
-  // Pertukaran kelas — mod Individu sahaja (kumpulan tetap tidak boleh swap).
+  // Pertukaran kelas — mod Individu sahaja (kumpulan tetap tidak boleh swap),
+  // dan HANYA jika kelas perlu relief (perluGanti=true). Bila "Kelas tidak
+  // perlu relief" dipilih, bahagian ini tidak boleh dipaparkan langsung.
   // Tarikh tamat == tarikh mula (cuti 1 hari) DIBENARKAN, dan tarikh tamat > tarikh
   // mula (cuti > 1 hari) kini turut DIBENARKAN — guru pilih tarikh pertukaran sendiri.
-  const bolehSwap = mode === 'individu' && !!form.guruNama && !!form.tarikhMula;
+  const bolehSwap = mode === 'individu' && !!form.guruNama && !!form.tarikhMula && form.perluGanti === true;
   // Cuti lebih daripada satu hari → perlukan pemilih "tarikh pertukaran" berasingan.
   const multiHari = bolehSwap && !!form.tarikhTamat && form.tarikhTamat !== form.tarikhMula;
   // Tarikh yang jadual sepatutnya dimuat untuk: 1 hari → tarikh cuti itu sendiri;
@@ -175,7 +178,9 @@ export default function Page() {
     setSwapPick({});
   }, [swapTarikhEfektif]);
 
-  // Guru, tarikh mula/tamat, atau mod berubah → data pertukaran lama tidak sah lagi.
+  // Guru, tarikh mula/tamat, mod, atau keperluan relief kelas berubah → data
+  // pertukaran lama tidak sah lagi (khususnya: tukar "Kelas tidak perlu relief"
+  // mesti kosongkan sebarang pilihan Suka Sama Suka yang telah dibuat).
   useEffect(() => {
     setAdaPertukaran(false);
     setJadualSlots([]);
@@ -184,7 +189,7 @@ export default function Page() {
     setSwapTarikh('');
     setSlotsError('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.guruNama, form.tarikhMula, form.tarikhTamat, mode]);
+  }, [form.guruNama, form.tarikhMula, form.tarikhTamat, mode, form.perluGanti]);
 
   function set(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -403,6 +408,7 @@ export default function Page() {
         masaMula: separuh ? form.masaMula : undefined,
         masaTamat: separuh ? form.masaTamat || undefined : undefined,
         catatan: form.catatan.trim() || undefined,
+        perluGanti: form.perluGanti,
         pertukaran,
       };
       const res = await api.submit(payload);
@@ -414,7 +420,7 @@ export default function Page() {
   }
 
   function resetForm() {
-    setForm({ guruNama: '', tarikhMula: '', tarikhTamat: '', sebab: '', jenis: 'SEPANJANG_HARI', masaMula: '', masaTamat: '', catatan: '' });
+    setForm({ guruNama: '', tarikhMula: '', tarikhTamat: '', sebab: '', jenis: 'SEPANJANG_HARI', masaMula: '', masaTamat: '', catatan: '', perluGanti: true });
     setMode('individu');
     setGuruList([]);
     setResult(null);
@@ -730,6 +736,37 @@ export default function Page() {
               value={form.catatan}
               onChange={(e) => set('catatan', e.target.value)}
             />
+
+            {/* Keperluan relief kelas — BAHARU */}
+            <div className="swapBox">
+              <span className="lbl">Keperluan relief kelas</span>
+              <div className="seg" role="radiogroup" aria-label="Keperluan relief kelas">
+                <button
+                  type="button"
+                  className={`segBtn ${form.perluGanti ? 'on' : ''}`}
+                  role="radio"
+                  aria-checked={form.perluGanti}
+                  onClick={() => set('perluGanti', true)}
+                >
+                  Kelas perlu relief
+                </button>
+                <button
+                  type="button"
+                  className={`segBtn ${!form.perluGanti ? 'on' : ''}`}
+                  role="radio"
+                  aria-checked={!form.perluGanti}
+                  onClick={() => set('perluGanti', false)}
+                >
+                  Kelas tidak perlu relief
+                </button>
+              </div>
+              {!form.perluGanti && (
+                <p className="swapQ">
+                  Guru masih direkodkan tidak hadir dan tidak akan menerima relief, tetapi kelas asal tidak akan
+                  dijana untuk relief.
+                </p>
+              )}
+            </div>
 
             {/* Pertukaran Kelas (Suka Sama Suka) — mod Individu (cuti 1 hari atau > 1 hari) */}
             {bolehSwap && (
