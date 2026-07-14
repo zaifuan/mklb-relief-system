@@ -17,16 +17,22 @@ import {
 const mm = masaKeMinit;
 
 // ── adaSekatanKhas ──
-test('adaSekatanKhas — LELAKI hanya kena guru " BIN "', () => {
+test('adaSekatanKhas — BERSARA: "LELAKI" bukan lagi magic string, ia cuma nama biasa (tiada guru sebenar bernama demikian → tidak sepadan sesiapa)', () => {
   const SK = [{ nama: 'LELAKI', hari: ['JUMAAT'], mulaDari: '12.05', mulaHingga: '12.35' }];
-  // Lelaki, Jumaat, dalam tetingkap → kena
-  assert.equal(adaSekatanKhas('AHMAD BIN ALI', 'JUMAAT', mm('12.00'), mm('12.30'), SK), true);
-  // Perempuan (BINTI) → tidak kena
+  // Selepas migrasi, cabang khas 'LELAKI' dibuang — ini kini padanan NAMA biasa sahaja,
+  // jadi walaupun baris ini entah bagaimana masih wujud (mis. data lama tidak dibersihkan),
+  // ia TIDAK akan menyekat sesiapa kerana tiada guru bernama tepat "LELAKI".
+  assert.equal(adaSekatanKhas('AHMAD BIN ALI', 'JUMAAT', mm('12.00'), mm('12.30'), SK), false);
   assert.equal(adaSekatanKhas('FATIMAH BINTI X', 'JUMAAT', mm('12.00'), mm('12.30'), SK), false);
-  // Lelaki tapi hari lain → tidak kena
-  assert.equal(adaSekatanKhas('AHMAD BIN ALI', 'ISNIN', mm('12.00'), mm('12.30'), SK), false);
-  // Lelaki, Jumaat, luar tetingkap masa → tidak kena
-  assert.equal(adaSekatanKhas('AHMAD BIN ALI', 'JUMAAT', mm('7.40'), mm('8.10'), SK), false);
+});
+
+test('adaSekatanKhas — guru lelaki BARU (tiada rekod individu) TIDAK disekat secara automatik lagi', () => {
+  // Keputusan ZAI: guru lelaki baharu tidak menerima sekatan automatik — Super Admin
+  // mesti tambah sekatan individu melalui halaman Sekatan Khas Relief.
+  const SK = [{ nama: 'MOHAMAD ZAIFUAN BIN ZULKAFLEE', hari: ['JUMAAT'], mulaDari: '12.05', mulaHingga: '12.35' }];
+  assert.equal(adaSekatanKhas('AHMAD BIN TALIB', 'JUMAAT', mm('12.10'), mm('12.20'), SK), false);
+  // Tapi guru yang MEMANG ada rekod individu (hasil migrasi/ditambah Super Admin) tetap disekat.
+  assert.equal(adaSekatanKhas('MOHAMAD ZAIFUAN BIN ZULKAFLEE', 'JUMAAT', mm('12.10'), mm('12.20'), SK), true);
 });
 
 test('adaSekatanKhas — sekatan nama penuh', () => {

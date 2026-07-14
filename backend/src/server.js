@@ -14,6 +14,7 @@ import absenceRoutes from './routes/absence.routes.js';
 import adminAbsenceRoutes from './routes/adminAbsence.routes.js';
 import accountRoutes from './routes/accounts.routes.js';
 import specialSettingRoutes from './routes/specialSetting.routes.js';
+import specialRestrictionRoutes from './routes/specialRestriction.routes.js';
 import reliefRoutes from './routes/relief.routes.js';
 import reliefAssignmentRoutes from './routes/reliefAssignment.routes.js';
 import telegramRoutes from './routes/telegram.routes.js';
@@ -53,6 +54,7 @@ app.use('/api/absence', absenceRoutes);
 app.use('/api/admin/absence', adminAbsenceRoutes);
 app.use('/api/admin/accounts', accountRoutes);
 app.use('/api/special-settings', specialSettingRoutes);
+app.use('/api/special-restrictions', specialRestrictionRoutes);
 
 // ── Relief Engine (Fasa 6) + Semakan cadangan (Fasa 7) ──
 // Daftar /assignment DAHULU supaya PATCH tidak ditangkap oleh GET /:tarikh.
@@ -114,6 +116,7 @@ app.get('/', (req, res) =>
       '/api/sync/run',
       '/api/absence/public/options',
       '/api/admin/absence',
+      '/api/special-restrictions',
       '/api/relief/generate',
       '/api/relief/:tarikh',
       '/api/relief/:tarikh/confirm-all',

@@ -15,18 +15,17 @@ async function main() {
   console.log('🌱 Memulakan seed...');
 
   // ── 1) Kategori guru ──
-  const categories = [
-    { nama: 'PENTADBIR', isReliefExempt: true }, // KATEGORI_EXEMPT
-    { nama: 'BIASA', isReliefExempt: false },
-    { nama: 'PSS', isReliefExempt: false },
-    { nama: 'KAUNSELOR', isReliefExempt: false },
-    { nama: 'PRAKTIKAL', isReliefExempt: false },
-  ];
-  for (const c of categories) {
+  // BERSARA (2026-07-14): isReliefExempt TIDAK LAGI ditetapkan oleh seed dalam
+  // apa jua keadaan (termasuk PENTADBIR) — medan kekal dalam schema untuk
+  // keserasian sahaja, tetapi Relief Engine tidak lagi membacanya (lihat
+  // reliefConfig.js). `update: {}` memastikan nilai sedia ada TIDAK disentuh;
+  // `create` guna default schema (false) bagi kategori baharu.
+  const categories = ['PENTADBIR', 'BIASA', 'PSS', 'KAUNSELOR', 'PRAKTIKAL'];
+  for (const nama of categories) {
     await prisma.teacherCategory.upsert({
-      where: { nama: c.nama },
-      update: { isReliefExempt: c.isReliefExempt },
-      create: c,
+      where: { nama },
+      update: {},
+      create: { nama },
     });
   }
   console.log(`  ✓ ${categories.length} kategori guru`);
@@ -94,27 +93,25 @@ async function main() {
   });
   console.log(`  ✓ ${accounts.length} akaun umum (ketuaadmin / adminjadual); ${dimatikan.count} akaun lama dinyahaktifkan`);
 
-  // ── 4) Sekatan khas (dari CONFIG.SEKATAN_KHAS — logik dikekalkan) ──
-  const restrictions = [
-    { target: 'ZURAINI BINTI IBRAHIM', hariList: ['SELASA'], masaDari: '11.00', masaHingga: '14.30' },
-    { target: 'SITI AMIRA BINTI MOHD DIN', hariList: ['SELASA'], masaDari: '11.00', masaHingga: '14.30' },
-    { target: 'ZULAIKAH BINTI MOHD NGAT', hariList: ['ISNIN', 'SELASA', 'RABU', 'KHAMIS', 'JUMAAT'], masaDari: '00.00', masaHingga: '23.59' },
-    { target: 'SUHAINA BINTI SHARIPUDDIN', hariList: ['JUMAAT'], masaDari: '11.35', masaHingga: '12.35' },
-    { target: 'MOHAMAD ZAIFUAN BIN ZULKAFLEE', hariList: ['ISNIN', 'SELASA', 'RABU'], masaDari: '13.00', masaHingga: '13.30' },
-    { target: 'MOHAMAD ZAIFUAN BIN ZULKAFLEE', hariList: ['KHAMIS'], masaDari: '12.30', masaHingga: '13.00' },
-    { target: 'HANIZA BINTI MUSTAPHA', hariList: ['SELASA', 'RABU', 'KHAMIS'], masaDari: '07.40', masaHingga: '09.10' },
-    { target: 'LELAKI', hariList: ['JUMAAT'], masaDari: '12.05', masaHingga: '12.35' },
-    { target: 'MOHD SHARIFUDDIN BIN ABDUL LATIF', hariList: ['ISNIN', 'SELASA', 'RABU'], masaDari: '13.30', masaHingga: '14.30' },
-  ];
-  // Config-like & kecil → padam dan tulis semula (idempotent penuh)
-  await prisma.specialRestriction.deleteMany({});
-  await prisma.specialRestriction.createMany({ data: restrictions });
-  console.log(`  ✓ ${restrictions.length} sekatan khas (SEKATAN_KHAS)`);
+  // ── 4) Sekatan Khas Relief ──
+  // BERSARA (2026-07-14): seed TIDAK LAGI menyentuh jadual special_restrictions
+  // dalam apa jua cara (tiada deleteMany, tiada createMany/upsert). Sebelum ini
+  // blok ini memadam & menulis semula sekatan hardcode PADA SETIAP RESTART
+  // container (SEED_ON_START=true secara default dalam docker-entrypoint.sh),
+  // yang bermakna sebarang sekatan yang ditetapkan Super Admin melalui halaman
+  // "Sekatan Khas Relief" akan HILANG setiap kali backend restart/redeploy.
+  // Sekatan kini diurus SEPENUHNYA melalui halaman Super Admin (CRUD di
+  // specialRestriction.controller.js) dan/atau skrip migrasi satu-kali
+  // idempotent (prisma/migrateSpecialRestrictions.js) — BUKAN oleh seed.
+  console.log('  ⏭️  Sekatan Khas Relief dilangkau (diurus oleh Super Admin — lihat migrateSpecialRestrictions.js)');
 
   // ── 5) Tetapan sistem (parameter enjin — tidak hardcode) ──
+  // BERSARA (2026-07-14): 'nama_exempt' dibuang daripada senarai ini — seed
+  // tidak lagi menulis/menulis-semula NAMA_EXEMPT (lihat reliefConfig.js).
+  // Baris sedia ada (jika ada, daripada deploy lama) TIDAK disentuh oleh upsert
+  // di bawah kerana kunci ini tiada dalam senarai `settings`.
   const settings = [
     { key: 'nama_sekolah', value: 'SABK MAAHAD AL KHAIR LIL BANAT' },
-    { key: 'nama_exempt', value: ['HANIZA BINTI MUSTAPHA'] }, // NAMA_EXEMPT (boleh edit)
     { key: 'relief_had_default', value: 1 }, // 1 relief/hari untuk semua guru
     { key: 'threshold_pass2', value: 10 }, // ambang PASS 2
     { key: 'tier2_max_slot_mengajar', value: 2 }, // syarat relief kedua

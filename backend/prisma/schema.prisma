@@ -57,6 +57,14 @@ enum SpecialSettingScope {
   TIME_RANGE
 }
 
+// Sekatan Khas Relief (kekal/permanent — diurus oleh Super Admin).
+// Menggantikan KATEGORI_EXEMPT / NAMA_EXEMPT / magic target "LELAKI".
+enum RestrictionType {
+  FULL_WEEK // Semua hari persekolahan, semua waktu
+  SPECIFIC_DAYS // Hari terpilih, sepanjang hari tersebut
+  SPECIFIC_TIME // Hari terpilih, julat waktu tertentu sahaja
+}
+
 // Tetapan Khas Jadual — berkuat kuasa pada SATU tarikh sahaja (tidak kekal).
 model DailySpecialSetting {
   id        Int                 @id @default(autoincrement())
@@ -95,7 +103,7 @@ enum SyncStatus {
 model TeacherCategory {
   id             Int      @id @default(autoincrement())
   nama           String   @unique // PENTADBIR, BIASA, PSS, KAUNSELOR, PRAKTIKAL
-  isReliefExempt Boolean  @default(false) // KATEGORI_EXEMPT (PENTADBIR = true)
+  isReliefExempt Boolean  @default(false) // BERSARA: tidak lagi dibaca oleh Relief Engine (lihat SpecialRestriction). Dikekalkan sahaja untuk keserasian schema; seed/sync tidak lagi menetapkannya.
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -103,12 +111,13 @@ model TeacherCategory {
 }
 
 model Teacher {
-  id        Int      @id @default(autoincrement())
-  nama      String   @unique
-  kategori  String // padanan lajur KATEGORI pada sheet KATEGORI GURU
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                  Int                  @id @default(autoincrement())
+  nama                String               @unique
+  kategori            String // padanan lajur KATEGORI pada sheet KATEGORI GURU
+  isActive            Boolean              @default(true)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  specialRestrictions SpecialRestriction[]
 
   @@map("teachers")
 }
@@ -249,17 +258,26 @@ model ReliefExclusion {
   @@map("relief_exclusions")
 }
 
+// Sekatan Khas Relief — SSOT tunggal untuk sekatan relief kekal guru.
+// teacherId ialah hubungan UTAMA (guna untuk padanan Relief Engine & CRUD);
+// `target` kekal sebagai SNAPSHOT nama untuk paparan/audit apabila guru
+// bertukar tidak aktif atau (bagi rekod warisan) tiada padanan teacherId.
+// masaDari/masaHingga kosong untuk FULL_WEEK & SPECIFIC_DAYS (tiada julat waktu).
 model SpecialRestriction {
-  id         Int      @id @default(autoincrement())
-  target     String // nama guru penuh atau "LELAKI"
-  hariList   String[] // cth: ["ISNIN","SELASA"]
-  masaDari   String // "13.00"
-  masaHingga String // "13.30"
-  isActive   Boolean  @default(true)
-  catatan    String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id              Int              @id @default(autoincrement())
+  teacherId       Int?
+  teacher         Teacher?         @relation(fields: [teacherId], references: [id], onDelete: SetNull)
+  target          String // snapshot nama guru penuh (audit/paparan)
+  restrictionType RestrictionType  @default(SPECIFIC_TIME)
+  hariList        String[] // cth: ["ISNIN","SELASA"]; kosong untuk FULL_WEEK
+  masaDari        String? // "13.00"; null untuk FULL_WEEK / SPECIFIC_DAYS
+  masaHingga      String? // "13.30"; null untuk FULL_WEEK / SPECIFIC_DAYS
+  isActive        Boolean          @default(true)
+  catatan         String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
+  @@index([teacherId])
   @@map("special_restrictions")
 }
 

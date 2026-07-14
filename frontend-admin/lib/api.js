@@ -85,6 +85,17 @@ export const api = {
     remove: (id) => request(`/api/special-settings/${id}`, { method: 'DELETE' }),
   },
 
+  // Sekatan Khas Relief (kekal) — SUPER_ADMIN sahaja
+  specialRestrictions: {
+    options: () => request('/api/special-restrictions/options'),
+    list: () => request('/api/special-restrictions'),
+    create: (payload) => request('/api/special-restrictions', { method: 'POST', body: payload }),
+    update: (id, payload) => request(`/api/special-restrictions/${id}`, { method: 'PATCH', body: payload }),
+    activate: (id) => request(`/api/special-restrictions/${id}/activate`, { method: 'PATCH' }),
+    deactivate: (id) => request(`/api/special-restrictions/${id}/deactivate`, { method: 'PATCH' }),
+    remove: (id) => request(`/api/special-restrictions/${id}`, { method: 'DELETE' }),
+  },
+
   // Pilihan awam (senarai guru + label sebab/jenis) untuk dropdown penapis
   publicOptions: () => request('/api/absence/public/options', { auth: false }),
 

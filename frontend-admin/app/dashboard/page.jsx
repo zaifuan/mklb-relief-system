@@ -55,6 +55,12 @@ const Icon = {
       <path d="M3 7l4 4 5-6 5 6 4-4-1.6 11H4.6L3 7zm1.8 13h14.4v1.4H4.8V20z" />
     </svg>
   ),
+  shield: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3l7 3.2v5.4c0 4.6-3 8.3-7 9.4-4-1.1-7-4.8-7-9.4V6.2L12 3z" />
+      <path d="M9.5 12l1.8 1.8L14.8 10" />
+    </svg>
+  ),
 };
 
 export default function DashboardPage() {
@@ -135,6 +141,7 @@ export default function DashboardPage() {
   const modules = [
     { href: '/dashboard/absence', icon: Icon.people, title: 'Ketidakhadiran Guru', sub: 'Lihat, semak & urus rekod ketidakhadiran', show: true },
     { href: '/dashboard/relief', icon: Icon.calendar, title: 'Jadual Relief', sub: 'Jana, semak & sahkan cadangan guru ganti', show: true },
+    { href: '/dashboard/sekatan-relief', icon: Icon.shield, title: 'Sekatan Khas Relief', sub: 'Urus guru yang tidak boleh menerima relief', show: isSuper },
     { href: '/dashboard/tetapan', icon: Icon.account, title: 'Tetapan Akaun', sub: 'Urus username & kata laluan Super Admin & Admin', show: isSuper },
     { href: '/dashboard/tetapan-telegram', icon: Icon.send, title: 'Tetapan Telegram', sub: 'Snapshot automatik, masa & realtime notifikasi', show: isSuper },
   ].filter((m) => m.show);

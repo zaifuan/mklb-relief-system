@@ -18,16 +18,16 @@ const norm = (s) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
 const isFree = (kelas) => String(kelas || '').trim().toUpperCase() === 'FREE';
 
 // ── SEKATAN KHAS ──────────────────────────────────────────
-// SEKATAN_KHAS: [{ nama | "LELAKI", hari: [..], mulaDari, mulaHingga }]
+// SEKATAN_KHAS: [{ nama, hari: [..], mulaDari, mulaHingga }] — sumber tunggal
+// ialah special_restrictions (Sekatan Khas Relief, Super Admin). Padanan
+// ikut NAMA GURU PENUH sahaja (BERSARA 2026-07-14: magic target "LELAKI" /
+// pengesanan " BIN " dibuang — setiap guru lelaki kini ada rekod individu,
+// lihat prisma/migrateSpecialRestrictions.js).
 export function adaSekatanKhas(namaGuru, hari, mula, tamat, SEKATAN_KHAS = []) {
   const g = norm(namaGuru);
   const h = String(hari).toUpperCase();
   for (const s of SEKATAN_KHAS) {
-    if (s.nama === 'LELAKI') {
-      if (!g.includes(' BIN ')) continue; // hanya guru lelaki
-    } else if (norm(s.nama) !== g) {
-      continue;
-    }
+    if (norm(s.nama) !== g) continue;
     if (!(s.hari || []).includes(h)) continue;
     const sm = masaKeMinit(s.mulaDari);
     const st = masaKeMinit(s.mulaHingga);

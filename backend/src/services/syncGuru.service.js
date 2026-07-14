@@ -34,12 +34,16 @@ export function prepareGuru({ headers, rows }) {
 }
 
 export async function writeGuru(tx, prepared) {
-  // 1) Pastikan kategori wujud (jangan timpa flag exempt sedia ada, cth PENTADBIR)
+  // 1) Pastikan kategori wujud.
+  // BERSARA (2026-07-14): tidak lagi menetapkan isReliefExempt:true untuk
+  // PENTADBIR secara automatik — Relief Engine tidak lagi membaca medan ini
+  // (lihat reliefConfig.js). `create` guna default schema (false); `update: {}`
+  // tidak menyentuh nilai sedia ada dalam kedua-dua arah.
   for (const nama of prepared.categories) {
     await tx.teacherCategory.upsert({
       where: { nama },
       update: {},
-      create: { nama, isReliefExempt: nama === 'PENTADBIR' },
+      create: { nama },
     });
   }
 
