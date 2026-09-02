@@ -83,6 +83,19 @@ const createSchema = z
 
 const MAX_HARI_JULAT = 31; // had selamat: maksimum hari setiap penghantaran
 
+// Tentukan sama ada submission ini WAJIB mendapat groupReference — apabila ia
+// akan menghasilkan LEBIH DARIPADA SATU AbsenceRecord (bilangan guru ×
+// bilangan hari). Patch v2: groupReference kini bermaksud IDENTITI SUBMISSION
+// (semua rekod yg berasal drpd SATU penghantaran borang yg hasilkan >1 rekod),
+// bukan lagi "≥2 guru sahaja" (semantik Patch v1). Submission 1 guru × 1 hari
+// (SATU rekod) SENGAJA kekal null — lihat laporan Patch v2 (audit UI admin:
+// badge "KUMPULAN" + butang "Batal Kumpulan" akan mengelirukan jika terpapar
+// pada rekod tunggal). Fungsi TULEN (tiada I/O) → boleh diuji unit tanpa DB,
+// guna corak pengiraan yang SAMA seperti had MAX_REKOD sedia ada di bawah.
+export function perluGroupReference(bilanganGuru, bilanganHari) {
+  return bilanganGuru * bilanganHari > 1;
+}
+
 // GET /api/absence/public/options  (awam)
 export async function getPublicOptions(req, res) {
   try {
@@ -199,9 +212,15 @@ export async function createAbsence(req, res) {
       return res.status(400).json({ success: false, mesej: `Guru tidak wujud atau tidak aktif: ${tidakSah.join(', ')}` });
     }
 
-    // ── Kumpulan (≥ 2 guru) → jana groupReference dikongsi semua rekod submit ini ──
+    // ── Submission akan hasilkan >1 AbsenceRecord → jana groupReference
+    //    dikongsi semua rekod submit ini. Patch v2: INI IDENTITI SUBMISSION,
+    //    bukan lagi penanda "ramai guru sahaja" (semantik Patch v1). Kini
+    //    merangkumi 1 guru × ≥2 hari juga (kes yang sebelum ini TIADA
+    //    identifier sebenar — punca utama Patch v2, lihat laporan). 1 guru ×
+    //    1 hari (SATU rekod) kekal null dengan sengaja — lihat
+    //    perluGroupReference() di atas.
     let groupReference = null;
-    if (namaList.length >= 2) {
+    if (perluGroupReference(namaList.length, jumlahHari)) {
       const prefix = `GRP-${mulaStr.replace(/-/g, '')}-`;
       const existing = await prisma.absenceRecord.findMany({
         where: { groupReference: { startsWith: prefix } },
@@ -323,6 +342,22 @@ export async function createAbsence(req, res) {
         references.push(record.reference);
         rekodBaharu.push(record);
       }
+    }
+
+    // ── Pembersihan tepi (Patch v2): submission dijangka >1 rekod
+    //    (perluGroupReference true) tetapi disebabkan dedup (rekod sedia ada
+    //    dilangkau di atas) HANYA SATU rekod BAHARU sebenarnya tercipta →
+    //    groupReference itu kini "kumpulan sebiji" yang mengelirukan (badge
+    //    "KUMPULAN" pada rekod yang sebenarnya bersendirian). Null-kan semula
+    //    pada SATU rekod itu sahaja — kes nipis, tidak menjejaskan rekod lain.
+    if (groupReference && rekodBaharu.length === 1) {
+      const rekodTunggal = rekodBaharu[0];
+      await prisma.absenceRecord.update({
+        where: { id: rekodTunggal.id },
+        data: { groupReference: null },
+      });
+      rekodTunggal.groupReference = null;
+      groupReference = null;
     }
 
     // Satu audit ringkas untuk keseluruhan penghantaran

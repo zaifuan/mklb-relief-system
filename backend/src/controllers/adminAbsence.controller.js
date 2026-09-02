@@ -39,6 +39,65 @@ function parseTarikh(s) {
   return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
 }
 
+// Peraturan klasifikasi TULEN (tiada I/O) — diasingkan drpd
+// annotateGroupSemantics() supaya boleh diuji unit terus tanpa mock DB,
+// sama corak spt perluGroupReference() dlm absence.controller.js (Patch v2).
+export function klasifikasiSubmission(uniqueTeachers, uniqueDates) {
+  return {
+    isGroupSubmission: uniqueTeachers > 1,
+    isMultiDaySubmission: uniqueTeachers === 1 && uniqueDates > 1,
+  };
+}
+
+// ── Fix badge KUMPULAN (susulan Patch v2) ──────────────────────────────
+// groupReference TIDAK LAGI bermaksud "KUMPULAN GURU" sejak Patch v2 — ia
+// kini identiti SEBARANG submission yang hasilkan >1 AbsenceRecord
+// (bilanganGuru × bilanganHari > 1), termasuk SEORANG guru multi-day.
+// Klasifikasi UI sebenar mesti berdasarkan uniqueTeachers dlm groupReference
+// tersebut, BUKAN kewujudan groupReference semata-mata — lihat
+// klasifikasiSubmission() di atas utk peraturan tepat.
+//
+// SATU helper dikongsi oleh listAbsence() & getAbsence() (bukan logik
+// bertaburan/duplicate — lihat laporan audit/patch).
+//
+// Dikira drpd SEMUA rekod (deletedAt:null) berkongsi groupReference yang
+// SAMA — SENGAJA TIDAK tapis statusBorang (rekod DIBATALKAN turut dikira).
+// Ini supaya klasifikasi cerminkan IDENTITI SUBMISSION ASAL, bukan baki
+// rekod AKTIF semasa — elak group/multi-day sebenar "tersalah kelas" bila
+// sebahagian rekod telah dibatalkan (lihat CASE 5/6/7, laporan audit).
+// Corak retrieval ini (deletedAt:null, tiada tapis statusBorang) SUDAH
+// selamat & sedia ada — sama seperti listAbsence() sendiri sudah pulangkan
+// rekod DIBATALKAN secara default.
+//
+// SATU query batch tambahan sahaja (bukan per-rekod) — elak N+1.
+async function annotateGroupSemantics(records) {
+  const groupRefs = [...new Set(records.map((r) => r.groupReference).filter(Boolean))];
+
+  const peta = new Map(); // groupReference -> { guru: Set<guruNama>, tarikh: Set<'YYYY-MM-DD'> }
+  if (groupRefs.length) {
+    const semuaRekodGroup = await prisma.absenceRecord.findMany({
+      where: { groupReference: { in: groupRefs }, deletedAt: null },
+      select: { groupReference: true, guruNama: true, tarikh: true },
+    });
+    for (const row of semuaRekodGroup) {
+      if (!peta.has(row.groupReference)) peta.set(row.groupReference, { guru: new Set(), tarikh: new Set() });
+      const info = peta.get(row.groupReference);
+      info.guru.add(row.guruNama);
+      info.tarikh.add(row.tarikh instanceof Date ? row.tarikh.toISOString().slice(0, 10) : String(row.tarikh));
+    }
+  }
+
+  return records.map((r) => {
+    if (!r.groupReference) return { ...r, ...klasifikasiSubmission(1, 1) };
+    const info = peta.get(r.groupReference);
+    // Selamat (data anomaly/CASE 8): groupReference wujud tapi tiada apa
+    // ditemui dlm batch (sepatutnya tidak berlaku) → fallback individu.
+    const uniqueTeachers = info ? info.guru.size : 1;
+    const uniqueDates = info ? info.tarikh.size : 1;
+    return { ...r, ...klasifikasiSubmission(uniqueTeachers, uniqueDates) };
+  });
+}
+
 // GET /api/admin/absence
 export async function listAbsence(req, res) {
   try {
@@ -77,7 +136,7 @@ export async function listAbsence(req, res) {
       },
     });
 
-    res.json({ records, jumlah: records.length });
+    res.json({ records: await annotateGroupSemantics(records), jumlah: records.length });
   } catch (err) {
     res.status(500).json({ mesej: err.message });
   }
@@ -113,7 +172,8 @@ export async function getAbsence(req, res) {
     const record = await prisma.absenceRecord.findUnique({ where: { id } });
     if (!record) return res.status(404).json({ mesej: 'Rekod tidak dijumpai' });
 
-    res.json(record);
+    const [annotated] = await annotateGroupSemantics([record]);
+    res.json(annotated);
   } catch (err) {
     res.status(500).json({ mesej: err.message });
   }

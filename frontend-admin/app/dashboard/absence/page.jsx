@@ -131,9 +131,16 @@ export default function AbsenceDashboard() {
     }
   }
 
+  // Membatalkan SEMUA rekod berkongsi groupReference — sama fungsi backend
+  // (cancelGroup()) utk KEDUA-DUA kes: kumpulan sebenar (isGroupSubmission)
+  // & individu multi-day (isMultiDaySubmission). Label & mesej sahaja
+  // berbeza ikut jenis — lihat rendering butang di bawah.
   async function batalKumpulan() {
-    if (!selected || modalBusy || !selected.groupReference) return;
-    if (!confirm('Batalkan semua rekod dalam kumpulan ini?')) return;
+    if (!selected || modalBusy || !(selected.isGroupSubmission || selected.isMultiDaySubmission)) return;
+    const mesej = selected.isGroupSubmission
+      ? 'Batalkan semua rekod dalam kumpulan ini?'
+      : 'Batalkan semua tarikh dalam tempoh ini?';
+    if (!confirm(mesej)) return;
     setModalBusy(true);
     setModalError('');
     try {
@@ -273,7 +280,7 @@ export default function AbsenceDashboard() {
                       <td>{r.hari}</td>
                       <td className="nameCell">
                         {r.guruNama}
-                        {r.groupReference && <span className="badge grp">KUMPULAN</span>}
+                        {r.isGroupSubmission && <span className="badge grp">KUMPULAN</span>}
                         {r.perluGanti === false && <span className="badge noRelief">Kelas tidak perlu relief</span>}
                       </td>
                       <td>{sebabLabel(r.sebabKategori)}</td>
@@ -308,7 +315,7 @@ export default function AbsenceDashboard() {
               {selected.perluGanti === false && (
                 <div><dt>Keperluan relief</dt><dd><span className="badge noRelief">Kelas tidak perlu relief</span></dd></div>
               )}
-              {selected.groupReference && (
+              {selected.isGroupSubmission && (
                 <div><dt>Jenis rekod</dt><dd><span className="badge grp">KUMPULAN</span></dd></div>
               )}
               <div><dt>Tarikh hantar</dt><dd>{fmtDateTime(selected.createdAt)}</dd></div>
@@ -330,9 +337,15 @@ export default function AbsenceDashboard() {
               ))}
             </div>
 
-            {selected.groupReference && (
+            {selected.isGroupSubmission && (
               <button className="btn warn full" disabled={modalBusy} onClick={batalKumpulan}>
                 Batal Kumpulan
+              </button>
+            )}
+
+            {!selected.isGroupSubmission && selected.isMultiDaySubmission && (
+              <button className="btn warn full" disabled={modalBusy} onClick={batalKumpulan}>
+                Batal Semua Tarikh
               </button>
             )}
 
