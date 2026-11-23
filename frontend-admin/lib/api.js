@@ -114,11 +114,16 @@ export const api = {
   // Jadual Relief (Fasa 6 jana + Fasa 7 semakan)
   relief: {
     get: (tarikh) => request(`/api/relief/${tarikh}`),
-    generate: (tarikh) => request('/api/relief/generate', { method: 'POST', body: { tarikh } }),
+    generate: (tarikh, modReliefKecemasan = false) =>
+      request('/api/relief/generate', { method: 'POST', body: { tarikh, modReliefKecemasan: modReliefKecemasan === true } }),
     confirm: (id) => request(`/api/relief/assignment/${id}/confirm`, { method: 'PATCH' }),
     cancel: (id) => request(`/api/relief/assignment/${id}/cancel`, { method: 'PATCH' }),
-    updateTeacher: (id, guruGanti) =>
-      request(`/api/relief/assignment/${id}/teacher`, { method: 'PATCH', body: { guruGanti } }),
+    // K05: guruGantiSemasa (pilihan) = nilai yang dilihat admin — backend tolak 409 jika baris sudah diubah orang lain
+    updateTeacher: (id, guruGanti, guruGantiSemasa) =>
+      request(`/api/relief/assignment/${id}/teacher`, {
+        method: 'PATCH',
+        body: guruGantiSemasa === undefined ? { guruGanti } : { guruGanti, guruGantiSemasa },
+      }),
     confirmAll: (tarikh) => request(`/api/relief/${tarikh}/confirm-all`, { method: 'PATCH' }),
     pdf: (tarikh) => requestBlob(`/api/relief/${tarikh}/pdf`),
   },
@@ -132,6 +137,12 @@ export const api = {
       update: (body) => request('/api/telegram/settings', { method: 'PATCH', body }),
     },
     status: () => request('/api/telegram/status'),
+    // Kemaskini 04 — Mod Senyap Telegram (PATCH: SUPER_ADMIN sahaja, disahkan di backend)
+    silentMode: {
+      get: () => request('/api/telegram/silent-mode'),
+      update: (silentMode) =>
+        request('/api/telegram/silent-mode', { method: 'PATCH', body: { silentMode: silentMode === true } }),
+    },
   },
 
   // Sync Google Sheet (master data) — run hanya SUPER_ADMIN

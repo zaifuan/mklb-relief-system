@@ -22,7 +22,54 @@ export default function TetapanTelegramPage() {
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
 
+  // ── Kemaskini 04: Mod Senyap Telegram (status sebenar dari backend; simpan berasingan) ──
+  const [silentMode, setSilentMode] = useState(null); // null = belum dimuat / gagal dimuat
+  const [silentSaving, setSilentSaving] = useState(false);
+  const [silentError, setSilentError] = useState('');
+  const [silentInfo, setSilentInfo] = useState('');
+
   const isCustom = !PRESETS.includes(snapshotTime);
+
+  async function muatSilentMode() {
+    try {
+      const r = await api.telegram.silentMode.get();
+      setSilentMode(r.silentMode === true);
+      setSilentError('');
+    } catch (e) {
+      setSilentMode(null);
+      setSilentError(e.message || 'Gagal memuatkan status Mod Senyap.');
+    }
+  }
+
+  async function tukarSilentMode(sasaran) {
+    if (silentSaving || silentMode === null) return;
+    const mesej = sasaran
+      ? 'Aktifkan Mod Senyap Telegram? Semua notifikasi automatik akan dihentikan sehingga Ketua Admin mematikannya.'
+      : 'Matikan Mod Senyap Telegram? Notifikasi automatik akan kembali berfungsi mengikut tetapan Telegram asal.';
+    if (!window.confirm(mesej)) return;
+    setSilentSaving(true);
+    setSilentError('');
+    setSilentInfo('');
+    try {
+      const r = await api.telegram.silentMode.update(sasaran);
+      setSilentMode(r.silentMode === true); // papar status yang DISAHKAN backend sahaja
+      setSilentInfo(r.silentMode ? 'Mod Senyap Telegram diaktifkan.' : 'Mod Senyap Telegram dimatikan.');
+      if (r.auditGagal) setSilentError(r.amaran || 'Status disimpan, tetapi rekod audit log gagal ditulis.');
+    } catch (e) {
+      // Respons gagal/hilang — muat semula status SEBENAR dari backend (mungkin sudah berubah)
+      const mesej = e.message || 'Gagal menyimpan Mod Senyap.';
+      try {
+        const r = await api.telegram.silentMode.get();
+        setSilentMode(r.silentMode === true);
+        setSilentError(`${mesej} Status semasa dimuat semula dari pelayan.`);
+      } catch {
+        setSilentMode(null);
+        setSilentError(`${mesej} Status semasa tidak dapat disahkan — muat semula halaman.`);
+      }
+    } finally {
+      setSilentSaving(false);
+    }
+  }
 
   async function muatStatus() {
     try {
@@ -49,6 +96,7 @@ export default function TetapanTelegramPage() {
         setAutoSnapshot(!!s.autoSnapshot);
         setRealtime(!!s.realtime);
         setSnapshotTime(s.snapshotTime || '05:30');
+        await muatSilentMode();
         await muatStatus();
       } catch (e) {
         if (e.status === 401) {
@@ -147,6 +195,35 @@ export default function TetapanTelegramPage() {
             <span className="val">{status?.lastSnapshot?.masa || 'Tiada lagi'}</span>
           </div>
         </div>
+      </section>
+
+      {/* Kemaskini 04 — Mod Senyap Telegram */}
+      <section className="card">
+        <h2>Mod Senyap Telegram</h2>
+        <label className="row">
+          <input
+            type="checkbox"
+            role="switch"
+            aria-checked={silentMode === true}
+            checked={silentMode === true}
+            disabled={silentSaving || silentMode === null}
+            onChange={(e) => tukarSilentMode(e.target.checked)}
+          />
+          <span>
+            <strong>
+              Mod Senyap Telegram:{' '}
+              <span className={`tag ${silentMode === true ? 'off' : 'mute'}`}>
+                {silentMode === null ? '—' : silentMode ? 'ON' : 'OFF'}
+              </span>
+            </strong>
+            <span className="hint">
+              Hentikan sementara semua notifikasi Telegram automatik. Penghantaran manual masih dibenarkan.
+            </span>
+          </span>
+        </label>
+        {silentSaving && <p className="muted">Menyimpan…</p>}
+        {silentError && <div className="msg err" role="alert">{silentError}</div>}
+        {silentInfo && <div className="msg ok" role="status">{silentInfo}</div>}
       </section>
 
       {/* Tetapan */}

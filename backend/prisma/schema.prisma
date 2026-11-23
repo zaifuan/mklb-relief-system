@@ -232,6 +232,7 @@ model ReliefAssignment {
   kategori     String?
   status       ReliefRowStatus @default(CADANGAN)
   isTier2      Boolean         @default(false) // penanda (2x) — relief kedua
+  diubahManual Boolean         @default(false) // K05 — guru ganti ditetapkan secara manual oleh admin
   auditNote    String?
   subjek       String?
   updatedBy    String?

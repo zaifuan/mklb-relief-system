@@ -82,6 +82,97 @@ export function semakRehat(namaGuru, hari, mula, tamat, jadualData, gantiSession
 // ── CARI CALON TERBAIK ────────────────────────────────────
 // Pulangkan array calon terurut. Tier 1 (belum dapat relief) diutamakan;
 // jika tiada, pulangkan Tier 2 (relief kedua) — hanya untuk PASS 2.
+// ════════════════════════════════════════════════════════════
+//  K05 — semakGuruManual: kelayakan SATU guru bagi SATU slot (tukar guru manual
+//  & pengesahan tugasan dikekalkan semasa Jana Semula).
+//  • Keputusan AKHIR oleh cariBestCalon (sumber kebenaran tunggal enjin).
+//  • Had manual: maksimum 2 relief sehari (relief kedua dibenarkan tanpa had
+//    slot mengajar — selaras K03). Tiada relief ketiga.
+//  • `sebab` dikira mengikut susunan semakan yang sama untuk mesej yang jelas.
+// ════════════════════════════════════════════════════════════
+export const SEBAB_TIDAK_LAYAK = {
+  TIADA_JADUAL: 'Guru tiada dalam jadual hari ini.',
+  PERTUKARAN: 'Guru sedang mengambil alih kelas (pertukaran suka sama suka) hari ini.',
+  TIDAK_HADIR: 'Guru tidak hadir pada waktu ini.',
+  DIKECUALIKAN: 'Guru dikecualikan daripada relief pada waktu ini.',
+  SEKATAN_KHAS: 'Guru terkena sekatan khas relief pada waktu ini.',
+  SEDANG_MENGAJAR: 'Guru sedang mengajar pada waktu ini.',
+  BERDERET: 'Relief akan berderet dengan waktu mengajar atau relief lain guru ini.',
+  BERTINDIH: 'Guru sudah ada relief lain pada waktu yang bertindih.',
+  HAD_RELIEF: 'Guru sudah mencapai had maksimum 2 relief sehari.',
+  TIDAK_LAYAK: 'Guru tidak layak untuk slot ini.',
+};
+
+export function semakGuruManual({
+  guru,
+  hari,
+  masaMula,
+  masaTamat,
+  semuaGuruHari,
+  semuaAbsenSet,
+  semuaAbsenMap,
+  mapKategori,
+  jadualData,
+  gantiGlobal,
+  cacheSlotFree,
+  cacheSlotMengajar,
+  pengecualianList = [],
+  guruKecualiList = [],
+  swapBuyers,
+  config,
+}) {
+  const n = norm(guru);
+  const hUpper = String(hari).toUpperCase();
+  const namaJadual = (semuaGuruHari || []).find((g) => norm(g) === n);
+  const tolak = (k) => ({ layak: false, sebab: k, mesej: SEBAB_TIDAK_LAYAK[k] });
+  if (!namaJadual) return tolak('TIADA_JADUAL');
+
+  const configManual = { ...config, hadDefault: 1, tier2MaxSlotMengajar: Number.POSITIVE_INFINITY };
+  const keputusan = cariBestCalon({
+    semuaGuruHari: [namaJadual],
+    hari: hUpper,
+    masaMula,
+    masaTamat,
+    semuaAbsenSet,
+    semuaAbsenMap,
+    mapKategori,
+    jadualData,
+    gantiGlobal,
+    cacheSlotFree,
+    cacheSlotMengajar,
+    hadSlotOverride: null,
+    pengecualianList,
+    guruKecualiList,
+    swapBuyers,
+    config: configManual,
+  });
+  if (keputusan.length) return { layak: true, isTier2: !!keputusan[0].isTier2 };
+
+  // Diagnosis (hanya untuk mesej) — susunan sama seperti cariBestCalon
+  if (swapBuyers && swapBuyers.has(n)) return tolak('PERTUKARAN');
+  if (semuaAbsenMap && semuaAbsenMap[n]) {
+    if (semuaAbsenMap[n].some((ab) => masaBertindih(masaMula, masaTamat, ab.masaMula, ab.masaTamat))) return tolak('TIDAK_HADIR');
+  } else if (semuaAbsenSet && semuaAbsenSet.has(n)) return tolak('TIDAK_HADIR');
+  for (const p of pengecualianList || []) {
+    if (norm(p.nama) !== n) continue;
+    if (p.mod === 'SEPANJANG_HARI') return tolak('DIKECUALIKAN');
+    if (p.mod === 'SLOT' && masaBertindih(masaMula, masaTamat, masaKeMinit(p.masaDari), masaKeMinit(p.masaHingga))) return tolak('DIKECUALIKAN');
+  }
+  for (const g of guruKecualiList || []) {
+    if (g.n === n && (g.full || masaBertindih(masaMula, masaTamat, g.mula, g.tamat))) return tolak('DIKECUALIKAN');
+  }
+  if (adaSekatanKhas(namaJadual, hUpper, masaMula, masaTamat, configManual.SEKATAN_KHAS ?? [])) return tolak('SEKATAN_KHAS');
+  if (!isFreepadaWaktu(namaJadual, hUpper, masaMula, masaTamat, jadualData)) return tolak('SEDANG_MENGAJAR');
+  const senarai = gantiGlobal[namaJadual] || gantiGlobal[n] || [];
+  for (const x of senarai) {
+    const [gMula, gTamat] = parseMasa(x.masa);
+    if (gMula !== null && masaBertindih(masaMula, masaTamat, gMula, gTamat)) return tolak('BERTINDIH');
+  }
+  if (!semakRehat(namaJadual, hUpper, masaMula, masaTamat, jadualData, gantiGlobal)) return tolak('BERDERET');
+  if (senarai.length >= 2) return tolak('HAD_RELIEF');
+  return tolak('TIDAK_LAYAK');
+}
+
 export function cariBestCalon({
   semuaGuruHari,
   hari,

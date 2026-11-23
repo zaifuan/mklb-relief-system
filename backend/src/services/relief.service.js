@@ -18,7 +18,7 @@
 import prisma from '../lib/prisma.js';
 import { hariDari } from '../lib/absenceUtil.js';
 import { loadReliefConfig } from '../lib/reliefConfig.js';
-import { cariBestCalon } from './candidate.service.js';
+import { cariBestCalon, semakGuruManual } from './candidate.service.js';
 import { parseMasa, masaBertindih, normalkanMasa } from '../lib/timeUtil.js';
 import { julatTidakHadir, slotDalamJulat, masaKeMinitAuto } from '../lib/absenceWindow.js';
 
@@ -40,8 +40,40 @@ class ReliefLockedError extends Error {
 }
 export { ReliefLockedError };
 
+// ── K05: tugasan yang DIKEKALKAN semasa Jana Semula ──
+//  DISAHKAN (disahkan admin), BATAL (sengaja dibatalkan — slot TIDAK diisi semula)
+//  dan baris yang guru gantinya ditetapkan secara manual (diubahManual).
+export const TIADA_PENGGANTI = 'TIADA_PENGGANTI';
+// K05 v2 — statistik jadual (SATU sumber; dikongsi enjin & GET → sentiasa sama).
+//  terisi = baris bukan BATAL dengan guru ganti SEBENAR (bukan null / TIADA_PENGGANTI)
+//  kosong = slot − terisi (termasuk null, TIADA_PENGGANTI dan BATAL)
+//  tier2  = relief kedua yang terisi
+//  Hanya MENGIRA — nilai TIADA_PENGGANTI/BATAL dalam DB tidak diubah.
+export function adaGuruGanti(a) {
+  return a.status !== 'BATAL' && !!a.guruGanti && a.guruGanti !== TIADA_PENGGANTI;
+}
+export function kiraRingkasan(rows = []) {
+  const slot = rows.length;
+  const terisi = rows.filter(adaGuruGanti).length;
+  return { slot, terisi, kosong: slot - terisi, tier2: rows.filter((a) => adaGuruGanti(a) && a.isTier2).length };
+}
+export const SEBAB_KONFLIK_PENDUA = 'Lebih daripada satu tugasan untuk kelas & masa yang sama — sila semak dan betulkan.';
+export function dikekalkan(a) {
+  return a.status === 'DISAHKAN' || a.status === 'BATAL' || a.diubahManual === true;
+}
+//  Cap jari set tugasan dikekalkan — dibanding semula di dalam transaksi simpan
+//  supaya perubahan serentak tidak hilang secara senyap.
+export function capKekal(assignments = []) {
+  return assignments
+    .filter(dikekalkan)
+    .map((a) => `${a.id}:${a.status}:${a.guruGanti ?? ''}:${a.diubahManual ? 1 : 0}`)
+    .sort()
+    .join('|');
+}
+
 // ── ORCHESTRATOR ──────────────────────────────────────────
-export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKelas = [] }) {
+export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKelas = [], modReliefKecemasan = false }) {
+  const kecemasan = modReliefKecemasan === true; // Kemaskini 03 — hanya true literal mengaktifkan mod
   const tarikhDate = tarikhKeUtcDate(tarikh);
   if (!tarikhDate) {
     const e = new Error('Format tarikh tidak sah (perlu YYYY-MM-DD).');
@@ -222,6 +254,50 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
   const semuaHasilCadangan = [];
   const diproses = new Set();
 
+  // ── K05: tugasan dikekalkan → tuntut slot + kira sebagai beban guru SEBELUM
+  //  calon baharu dipilih. Tanpa tugasan dikekalkan, blok ini tidak berbuat
+  //  apa-apa (laluan enjin sama seperti asal).
+  const kekalDalamSlot = [];
+  const pendua = []; // tugasan terlindung kedua+ bagi slot sama — DIKEKALKAN & dilaporkan (tidak dipadam senyap)
+  const tidakDiperlukan = [];
+  const konflik = [];
+  const tugasanKekal = (existingBatch?.assignments || []).filter(dikekalkan);
+  if (tugasanKekal.length) {
+    const kunciSlot = new Set(slotTasksTersusun.map((t) => `${norm(t.guruNama)}||${t.slot.kelas}||${t.slot.masa}`));
+    for (const a of [...tugasanKekal].sort((x, y) => x.id - y.id)) {
+      const k = `${norm(a.guruTakHadir)}||${a.kelas}||${a.masa}`;
+      if (!kunciSlot.has(k)) {
+        tidakDiperlukan.push({ id: a.id, guruTakHadir: a.guruTakHadir, kelas: a.kelas, masa: a.masa, guruGanti: a.guruGanti, status: a.status, diubahManual: !!a.diubahManual, sebab: 'SLOT_TIDAK_DIPERLUKAN' });
+        continue;
+      }
+      if (diproses.has(k)) {
+        pendua.push(a);
+        konflik.push({ id: a.id, guruTakHadir: a.guruTakHadir, kelas: a.kelas, masa: a.masa, guruGanti: a.guruGanti, status: a.status, diubahManual: !!a.diubahManual, sebab: 'PENDUA', mesej: SEBAB_KONFLIK_PENDUA });
+        continue;
+      }
+      diproses.add(k);
+      kekalDalamSlot.push(a);
+    }
+    const bebanKekal = (a) => a.status !== 'BATAL' && a.guruGanti && a.guruGanti !== TIADA_PENGGANTI;
+    for (const a of [...kekalDalamSlot, ...pendua]) {
+      if (!bebanKekal(a)) continue;
+      const g = norm(a.guruGanti);
+      (gantiGlobal[g] = gantiGlobal[g] || []).push({ kelas: a.kelas, masa: a.masa, _kekalId: a.id });
+    }
+    // Sahkan setiap tugasan dikekalkan terhadap keadaan SEMASA (beban lain = tugasan dikekalkan lain)
+    for (const a of kekalDalamSlot) {
+      if (!bebanKekal(a)) continue;
+      const [m, t] = parseMasa(a.masa);
+      const lain = {};
+      for (const [g, arr] of Object.entries(gantiGlobal)) lain[g] = arr.filter((x) => x._kekalId !== a.id);
+      const s = semakGuruManual({
+        guru: a.guruGanti, hari: hUpper, masaMula: m, masaTamat: t, semuaGuruHari, semuaAbsenSet, semuaAbsenMap,
+        mapKategori, jadualData, gantiGlobal: lain, cacheSlotFree, cacheSlotMengajar, pengecualianList, guruKecualiList, swapBuyers, config,
+      });
+      if (!s.layak) konflik.push({ id: a.id, guruTakHadir: a.guruTakHadir, kelas: a.kelas, masa: a.masa, guruGanti: a.guruGanti, status: a.status, diubahManual: !!a.diubahManual, sebab: s.sebab, mesej: s.mesej });
+    }
+  }
+
   for (const task of slotTasksTersusun) {
     const guruNama = task.guruNama;
     const slot = task.slot;
@@ -274,8 +350,16 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
   }
 
   // ── PASS 2: isi slot kosong jika banyak slot ──
+  //  Kemaskini 03 — Mod Relief Kecemasan: ambang thresholdPass2 diabaikan, dan
+  //  relief kedua dibuka kepada SEMUA guru yang sudah ada TEPAT 1 relief (tanpa
+  //  syarat tier2MaxSlotMengajar). Had keras 2 kekal kerana cariBestCalon hanya
+  //  menerima Tier 2 jika bilanganGanti === 1. Calon relief pertama (Tier 1)
+  //  tetap didahulukan; susunan slotMengajar menaik. Mod OFF → configP2 === config.
   const slotKosong = semuaHasilCadangan.filter((r) => r.guruGanti === null).length;
-  if (semuaHasilCadangan.length >= config.thresholdPass2 && slotKosong > 0) {
+  const configP2 = kecemasan ? { ...config, hadDefault: 1, tier2MaxSlotMengajar: Number.POSITIVE_INFINITY } : config;
+  const notaTier2 = kecemasan ? 'Relief kedua (2x) — Mod Kecemasan' : 'Relief kedua (2x)';
+  // K05: ambang dikira atas SEMUA slot diperlukan (termasuk slot tugasan dikekalkan) — sama seperti asal
+  if ((kecemasan || semuaHasilCadangan.length + kekalDalamSlot.length >= config.thresholdPass2) && slotKosong > 0) {
     for (const row of semuaHasilCadangan) {
       if (row.guruGanti !== null) continue;
       const [mP2, tP2] = parseMasa(row.masa);
@@ -297,14 +381,14 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
         pengecualianList,
         guruKecualiList,
         swapBuyers,
-        config,
+        config: configP2,
       });
       const pP2 = calonP2[0] || null;
       if (pP2) {
         row.guruGanti = pP2.nama;
         row.kategori = pP2.kategori;
         row.isTier2 = !!pP2.isTier2;
-        row.auditNote = pP2.isTier2 ? 'Relief kedua (2x)' : null;
+        row.auditNote = pP2.isTier2 ? notaTier2 : null;
         const k = norm(pP2.nama);
         (gantiGlobal[k] = gantiGlobal[k] || []).push({ kelas: row.kelas, masa: row.masa });
       }
@@ -314,12 +398,9 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
   // Buang medan dalaman
   const hasil = semuaHasilCadangan.map(({ _mula, ...r }) => r);
 
-  const ringkasan = {
-    slot: hasil.length,
-    terisi: hasil.filter((r) => r.guruGanti !== null).length,
-    kosong: hasil.filter((r) => r.guruGanti === null).length,
-    tier2: hasil.filter((r) => r.isTier2).length,
-  };
+  // Ringkasan = jadual AKHIR (baris baharu + tugasan dikekalkan) — selaras dashboard
+  const akhir = [...hasil, ...kekalDalamSlot, ...pendua];
+  const ringkasan = kiraRingkasan(akhir); // K05 v2 — sama seperti GET
 
   return {
     tarikhDate,
@@ -327,6 +408,14 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
     hasil,
     ringkasan,
     existingBatch,
+    modReliefKecemasan: kecemasan,
+    kekal: {
+      ids: [...kekalDalamSlot, ...pendua].map((a) => a.id),
+      cap: capKekal(existingBatch?.assignments || []),
+      dikekalkan: kekalDalamSlot.length + pendua.length,
+      tidakDiperlukan,
+      konflik,
+    },
     adaAbsen: absentAll.length > 0,
     adaPerluGanti: guruPerluGanti.length > 0,
   };
@@ -340,8 +429,10 @@ export async function janaJadualGanti({ tarikh, pengecualianKelas = [], fokusKel
 //  TIDAK menyentuh janaJadualGanti / cariBestCalon (enjin kekal terkunci).
 //  Pulangan: { [assignmentId]: [{ nama, reason, reliefCountToday }] }
 // ════════════════════════════════════════════════════════════
-export async function senaraiCalonSemua(tarikhDate) {
-  if (!tarikhDate) return {};
+// K05 — konteks harian dikongsi (dropdown calon, tukar guru manual, semakan konflik).
+//  Diekstrak tanpa perubahan logik daripada senaraiCalonSemua asal.
+export async function bacaKonteksHari(tarikhDate) {
+  if (!tarikhDate) return null;
   const hUpper = hariDari(tarikhDate).toUpperCase();
 
   const [jadualRows, absentAll, teachers, exclusions, config, batch, specialSettings, classSwaps] = await Promise.all([
@@ -356,7 +447,6 @@ export async function senaraiCalonSemua(tarikhDate) {
       where: { tarikh: tarikhDate, absenceRecord: { statusBorang: 'AKTIF', deletedAt: null } },
     }),
   ]);
-  if (!batch) return {};
 
   const jadualData = jadualRows.map((r) => ({
     hari: String(r.hari).trim().toUpperCase(),
@@ -422,6 +512,15 @@ export async function senaraiCalonSemua(tarikhDate) {
   // sepanjang hari, jadi dikecualikan daripada senarai calon (selaras enjin auto).
   const swapBuyers = new Set(classSwaps.map((sw) => norm(sw.guruGanti)));
 
+  return { hUpper, jadualData, semuaGuruHari, semuaAbsenSet, semuaAbsenMap, mapKategori, pengecualianList, guruKecualiList, cacheSlotFree, cacheSlotMengajar, swapBuyers, config, batch, bebanFlat };
+}
+
+export async function senaraiCalonSemua(tarikhDate, konteks = null) {
+  if (!tarikhDate) return {};
+  const ctx = konteks || (await bacaKonteksHari(tarikhDate));
+  const { hUpper, jadualData, semuaGuruHari, semuaAbsenSet, semuaAbsenMap, mapKategori, pengecualianList, guruKecualiList, cacheSlotFree, cacheSlotMengajar, swapBuyers, config, batch, bebanFlat } = ctx;
+  if (!batch) return {};
+
   const hasil = {};
   for (const a of batch.assignments) {
     if (a.status === 'BATAL') {
@@ -477,4 +576,35 @@ export async function senaraiCalonSemua(tarikhDate) {
     hasil[a.id] = calon;
   }
   return hasil;
+}
+
+// ════════════════════════════════════════════════════════════
+//  K05 — semakKonflikBatch: sahkan setiap tugasan bergurur (bukan BATAL /
+//  TIADA_PENGGANTI) terhadap keadaan SEMASA. Dikira semasa baca (tiada lajur
+//  disimpan) → sentiasa tepat selepas absen/sekatan/jadual berubah.
+// ════════════════════════════════════════════════════════════
+export function semakKonflikBatch(ctx) {
+  const out = {};
+  if (!ctx?.batch) return out;
+  // Pendua slot (sebarang status) — yang kedua dan seterusnya (id menaik) ditanda
+  const dilihat = new Set();
+  for (const a of [...ctx.batch.assignments].sort((x, y) => x.id - y.id)) {
+    const k = `${norm(a.guruTakHadir)}||${a.kelas}||${a.masa}`;
+    if (dilihat.has(k)) out[a.id] = { sebab: 'PENDUA', mesej: SEBAB_KONFLIK_PENDUA };
+    dilihat.add(k);
+  }
+  for (const a of ctx.batch.assignments) {
+    if (out[a.id]) continue;
+    if (a.status === 'BATAL' || !a.guruGanti || a.guruGanti === TIADA_PENGGANTI) continue;
+    const [m, t] = parseMasa(a.masa);
+    if (m === null) continue;
+    const lain = {};
+    for (const x of ctx.bebanFlat) {
+      if (x.fromId === a.id) continue;
+      (lain[x.nama] = lain[x.nama] || []).push({ kelas: x.kelas, masa: x.masa });
+    }
+    const r = semakGuruManual({ guru: a.guruGanti, hari: ctx.hUpper, masaMula: m, masaTamat: t, ...ctx, gantiGlobal: lain });
+    if (!r.layak) out[a.id] = { sebab: r.sebab, mesej: r.mesej };
+  }
+  return out;
 }

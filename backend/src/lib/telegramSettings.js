@@ -94,3 +94,25 @@ export async function setTelegramSettings(partial) {
   }
   return getTelegramSettings();
 }
+
+// ── Kemaskini 04: Mod Senyap Telegram (suis induk notifikasi AUTOMATIK) ──
+//  Kunci berasingan — TIDAK menyentuh autoSnapshot/realtime/snapshotTime.
+//  Hanya nilai boolean `true` = aktif; tiada kunci / nilai lain → OFF (default).
+//  Dibaca terus dari DB setiap kali (tiada cache memori) → kekal selepas restart.
+export const SILENT_MODE_KEY = 'telegram_silent_mode';
+
+export async function isTelegramSilentMode() {
+  const row = await prisma.systemSetting.findUnique({ where: { key: SILENT_MODE_KEY } });
+  return row?.value === true;
+}
+
+export async function setTelegramSilentMode(aktif) {
+  // K04-S: status dipulangkan daripada baris yang DITULIS oleh upsert — tiada
+  // bacaan kedua yang boleh gagal selepas perubahan sudah disimpan.
+  const row = await prisma.systemSetting.upsert({
+    where: { key: SILENT_MODE_KEY },
+    update: { value: aktif === true },
+    create: { key: SILENT_MODE_KEY, value: aktif === true },
+  });
+  return row?.value === true;
+}

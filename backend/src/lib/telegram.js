@@ -9,13 +9,22 @@
 //  • Guna fetch terbina Node 22 — tiada dependency baharu.
 // ════════════════════════════════════════════════════════════
 
+import { isTelegramSilentMode } from './telegramSettings.js';
+
 const TELEGRAM_API = 'https://api.telegram.org';
 
 export function isTelegramConfigured() {
   return !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID);
 }
 
-export async function sendTelegramMessage(text) {
+// Kemaskini 04 — `manual: true` HANYA dihantar oleh controller penghantaran manual
+// (POST /api/telegram/snapshot/send, SUPER_ADMIN). Ia pilihan kod, bukan input
+// pengguna. Semua pemanggil lain dianggap AUTOMATIK dan digugurkan semasa Mod
+// Senyap (tiada simpanan/antrian, tiada retry).
+export async function sendTelegramMessage(text, { manual = false } = {}) {
+  if (manual !== true && (await isTelegramSilentMode())) {
+    return { ok: false, skipped: true, error: 'SILENT_MODE' };
+  }
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
 

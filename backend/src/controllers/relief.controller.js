@@ -1,14 +1,14 @@
 // ════════════════════════════════════════════════════════════
 //  Controller: relief (Fasa 6 — Relief Engine)
-//    generateRelief    POST /api/relief/generate  { tarikh }
+//    generateRelief    POST /api/relief/generate  { tarikh, modReliefKecemasan? }
 //    getReliefByTarikh GET  /api/relief/:tarikh
 // ════════════════════════════════════════════════════════════
 
 import { z } from 'zod';
 import prisma from '../lib/prisma.js';
 import { writeAudit, getClientIp } from '../lib/audit.js';
-import { janaJadualGanti, senaraiCalonSemua } from '../services/relief.service.js';
-import { simpanReliefBatch } from '../services/assignment.service.js';
+import { janaJadualGanti, senaraiCalonSemua, bacaKonteksHari, semakKonflikBatch, kiraRingkasan } from '../services/relief.service.js';
+import { simpanReliefBatch, kosongkanBatch, kunciBatch } from '../services/assignment.service.js';
 import { parseMasa } from '../lib/timeUtil.js';
 import { hariDari } from '../lib/absenceUtil.js';
 import { streamReliefPdf } from '../services/pdf.service.js';
@@ -17,6 +17,9 @@ const bodySchema = z.object({
   tarikh: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, { message: 'Tarikh perlu format YYYY-MM-DD' }),
+  // Kemaskini 03 — Mod Relief Kecemasan (per permintaan; tidak disimpan global).
+  // Tidak dihantar / false → Mod Normal. Hanya boolean diterima ("true", 1, null → 400).
+  modReliefKecemasan: z.boolean({ invalid_type_error: 'modReliefKecemasan mesti boolean' }).optional(),
 });
 
 function parseTarikhParam(s) {
@@ -72,26 +75,36 @@ export async function generateRelief(req, res) {
     return res.status(400).json({ mesej: parsed.error.errors[0]?.message || 'Input tidak sah' });
   }
   const { tarikh } = parsed.data;
+  const modReliefKecemasan = parsed.data.modReliefKecemasan === true;
 
   try {
-    const hasilJana = await janaJadualGanti({ tarikh });
+    const hasilJana = await janaJadualGanti({ tarikh, modReliefKecemasan });
 
     // Tiada guru perlu ganti — buang sebarang batch lama tarikh ini supaya
     // assignment lama TIDAK kekal selepas semua rekod ketidakhadiran dibatalkan.
     if (!hasilJana.adaPerluGanti) {
-      await prisma.reliefBatch.deleteMany({ where: { tarikh: hasilJana.tarikhDate } });
+      // K05 (Isu A): dalam transaksi + kunci — batch DIHANTAR/SELESAI tidak dipadam
+      const kosong = await kosongkanBatch(hasilJana.tarikhDate);
       await writeAudit({
         userId: req.user?.id || null,
         action: 'RELIEF_CLEAR_EMPTY',
         entity: `relief:${tarikh}`,
-        detail: { tarikh, sebab: hasilJana.adaAbsen ? 'tiada perlu ganti' : 'tiada ketidakhadiran' },
+        detail: {
+          tarikh,
+          modReliefKecemasan,
+          sebab: hasilJana.adaAbsen ? 'tiada perlu ganti' : 'tiada ketidakhadiran',
+          batchDibuang: kosong.batchDibuang,
+          tugasanKekalDibuang: kosong.tugasanKekalDibuang,
+        },
         ip: getClientIp(req),
       });
       return res.json({
         tarikh,
         hari: hasilJana.hari,
         batchId: null,
+        modReliefKecemasan,
         ringkasan: { slot: 0, terisi: 0, kosong: 0, tier2: 0 },
+        kekal: { dikekalkan: 0, tidakDiperlukan: kosong.tugasanKekalDibuang, konflik: [] },
         generated: [],
         mesej: hasilJana.adaAbsen
           ? 'Ada guru tidak hadir tetapi tiada yang ditanda perlu ganti.'
@@ -104,13 +117,28 @@ export async function generateRelief(req, res) {
       hari: hasilJana.hari,
       hasil: hasilJana.hasil,
       generatedBy: req.user?.username || null,
+      kekal: hasilJana.kekal,
     });
 
     await writeAudit({
       userId: req.user?.id || null,
       action: 'RELIEF_GENERATE',
       entity: `relief_batch:${simpan.batchId}`,
-      detail: { tarikh, ringkasan: hasilJana.ringkasan, dibuang: simpan.dibuang, dicipta: simpan.dicipta },
+      detail: {
+        tarikh,
+        dijanaOleh: req.user?.username || null,
+        modReliefKecemasan,
+        slot: hasilJana.ringkasan.slot,
+        terisi: hasilJana.ringkasan.terisi,
+        kosong: hasilJana.ringkasan.kosong,
+        reliefKedua: hasilJana.ringkasan.tier2,
+        ringkasan: hasilJana.ringkasan,
+        dibuang: simpan.dibuang,
+        dicipta: simpan.dicipta,
+        dikekalkan: simpan.dikekalkan,
+        tidakDiperlukan: hasilJana.kekal.tidakDiperlukan,
+        konflik: hasilJana.kekal.konflik,
+      },
       ip: getClientIp(req),
     });
 
@@ -119,7 +147,13 @@ export async function generateRelief(req, res) {
       hari: hasilJana.hari,
       batchId: simpan.batchId,
       status: simpan.status,
+      modReliefKecemasan,
       ringkasan: hasilJana.ringkasan,
+      kekal: {
+        dikekalkan: hasilJana.kekal.dikekalkan,
+        tidakDiperlukan: hasilJana.kekal.tidakDiperlukan,
+        konflik: hasilJana.kekal.konflik,
+      },
       generated: hasilJana.hasil.map((r) => ({
         guruTakHadir: r.guruTakHadir,
         hari: r.hari,
@@ -136,6 +170,12 @@ export async function generateRelief(req, res) {
   } catch (err) {
     if (err.code === 'LOCKED') {
       return res.status(409).json({ mesej: err.message, statusBatch: err.statusBatch });
+    }
+    if (err.code === 'BERUBAH') {
+      return res.status(409).json({ mesej: err.message, berubah: true });
+    }
+    if (err.code === 'P2002') {
+      return res.status(409).json({ mesej: 'Jadual sedang dijana oleh pengguna lain. Sila muat semula dan cuba lagi.', berubah: true });
     }
     if (err.code === 'BAD_DATE') {
       return res.status(400).json({ mesej: err.message });
@@ -197,12 +237,16 @@ export async function getReliefByTarikh(req, res) {
 
     // Calon guru ganti untuk dropdown (tidak dikira jika batch terkunci)
     let candById = {};
+    let konflikById = {};
     if (!['DIHANTAR', 'SELESAI'].includes(batch.status)) {
       try {
-        candById = await senaraiCalonSemua(tarikhDate);
+        const ctx = await bacaKonteksHari(tarikhDate);
+        candById = await senaraiCalonSemua(tarikhDate, ctx);
+        konflikById = semakKonflikBatch(ctx); // K05 — konflik semasa (tidak disimpan)
       } catch (e) {
         console.error('senaraiCalonSemua ERROR:', e);
         candById = {};
+        konflikById = {};
       }
     }
 
@@ -218,10 +262,11 @@ export async function getReliefByTarikh(req, res) {
       status: a.status,
       isTier2: a.isTier2,
       auditNote: a.auditNote,
+      diubahManual: !!a.diubahManual,
+      konflik: konflikById[a.id] || null,
       candidates: candById[a.id] || [],
     }));
 
-    const terisi = assignments.filter((a) => a.guruGanti).length;
     res.json({
       tarikh: req.params.tarikh,
       status: batch.status,
@@ -231,10 +276,8 @@ export async function getReliefByTarikh(req, res) {
       confirmedAt: batch.confirmedAt,
       jumlah: assignments.length,
       ringkasan: {
-        slot: assignments.length,
-        terisi,
-        kosong: assignments.length - terisi,
-        tier2: assignments.filter((a) => a.isTier2).length,
+        ...kiraRingkasan(assignments), // K05 v2 — TIADA_PENGGANTI & BATAL bukan "terisi"; sama seperti respons jana
+        konflik: assignments.filter((a) => a.konflik).length, // K05 — jadual TIDAK bebas konflik jika > 0
       },
       assignments,
       swaps,
@@ -253,16 +296,22 @@ export async function confirmAllByTarikh(req, res) {
   if (!tarikhDate) return res.status(400).json({ mesej: 'Tarikh perlu format YYYY-MM-DD' });
 
   try {
-    const batch = await prisma.reliefBatch.findUnique({ where: { tarikh: tarikhDate } });
-    if (!batch) return res.status(404).json({ mesej: 'Tiada batch relief untuk tarikh ini.' });
-    if (['DIHANTAR', 'SELESAI'].includes(batch.status)) {
-      return res.status(409).json({ mesej: `Batch sudah ${batch.status} — tidak boleh disahkan.`, statusBatch: batch.status });
-    }
-
-    const r = await prisma.reliefAssignment.updateMany({
-      where: { batchId: batch.id, status: 'CADANGAN' },
-      data: { status: 'DISAHKAN', updatedBy: req.user?.username || null },
+    const b0 = await prisma.reliefBatch.findUnique({ where: { tarikh: tarikhDate } });
+    if (!b0) return res.status(404).json({ mesej: 'Tiada batch relief untuk tarikh ini.' });
+    // K05: dalam transaksi + kunci batch (bersiri dengan Jana Semula / tukar guru)
+    const out = await prisma.$transaction(async (tx) => {
+      const batch = await kunciBatch(tx, b0.id);
+      if (['DIHANTAR', 'SELESAI'].includes(batch.status)) return { kunci: batch.status };
+      const r = await tx.reliefAssignment.updateMany({
+        where: { batchId: batch.id, status: 'CADANGAN' },
+        data: { status: 'DISAHKAN', updatedBy: req.user?.username || null },
+      });
+      return { batch, r };
     });
+    if (out.kunci) {
+      return res.status(409).json({ mesej: `Batch sudah ${out.kunci} — tidak boleh disahkan.`, statusBatch: out.kunci });
+    }
+    const { batch, r } = out;
 
     await writeAudit({
       userId: req.user?.id || null,

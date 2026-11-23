@@ -21,7 +21,7 @@ import prisma from '../lib/prisma.js';
 import { writeAudit } from '../lib/audit.js';
 import { sendTelegramMessage, isTelegramConfigured } from '../lib/telegram.js';
 import { buildSnapshot, tarikhKeUtcDate } from './snapshot.service.js';
-import { getTelegramSettings } from '../lib/telegramSettings.js';
+import { getTelegramSettings, isTelegramSilentMode } from '../lib/telegramSettings.js';
 
 // ── Bantuan masa/tarikh (zon Asia/Kuala_Lumpur) ──
 function todayKLStr() {
@@ -120,6 +120,7 @@ async function bolehHantarRealtime(rekodTarikhDate, settings) {
 // ── HANTAR REALTIME (selepas tambah/kemaskini rekod) — snapshot PENUH ──
 export async function sendRealtime(rec, { ip = null } = {}) {
   try {
+    if (await isTelegramSilentMode()) return { skipped: true, reason: 'SILENT' }; // K04 — digugurkan
     const settings = await getTelegramSettings();
     if (!(await bolehHantarRealtime(rec.tarikh, settings))) return { skipped: true, reason: 'GATE' };
     if (!isTelegramConfigured()) return { skipped: true, reason: 'NO_CONFIG' };
@@ -129,6 +130,7 @@ export async function sendRealtime(rec, { ip = null } = {}) {
     if (!snap.adaRekod) return { skipped: true, reason: 'TIADA' };
 
     const hasil = await sendTelegramMessage(snap.text);
+    if (hasil.skipped) return { skipped: true, reason: 'SILENT' }; // K04 — Mod Senyap diaktifkan semasa proses
     await logTelegram({ tarikhDate: rec.tarikh, jenis: 'REALTIME', text: snap.text, hasil, totalRecords: snap.jumlahGuru });
 
     if (hasil.ok) {
@@ -152,6 +154,7 @@ export async function sendRealtime(rec, { ip = null } = {}) {
 //  memaparkan rekod tersebut (sama gaya GAS).
 export async function sendPembatalan(rec, { userId = null, ip = null } = {}) {
   try {
+    if (await isTelegramSilentMode()) return { skipped: true, reason: 'SILENT' }; // K04 — digugurkan
     const settings = await getTelegramSettings();
     if (!(await bolehHantarRealtime(rec.tarikh, settings))) return { skipped: true, reason: 'GATE' };
     if (!isTelegramConfigured()) return { skipped: true, reason: 'NO_CONFIG' };
@@ -160,6 +163,7 @@ export async function sendPembatalan(rec, { userId = null, ip = null } = {}) {
     const snap = await buildSnapshot({ tarikh: tarikhStr, pembatalan: true });
 
     const hasil = await sendTelegramMessage(snap.text);
+    if (hasil.skipped) return { skipped: true, reason: 'SILENT' }; // K04 — Mod Senyap diaktifkan semasa proses
     await logTelegram({ tarikhDate: rec.tarikh, jenis: 'PEMBATALAN', text: snap.text, hasil, totalRecords: snap.jumlahGuru });
 
     if (hasil.ok) {
@@ -203,13 +207,27 @@ async function runAutoSnapshot(slotName, { force = false } = {}) {
     return { status: 'SKIP', reason: 'HUJUNG_MINGGU', slot: slotName, tarikh };
   }
 
-  // Dedup PER (slot, tarikh sasaran) — AUTO_EARLY & AUTO_MORNING berasingan
+  // Dedup PER (slot, tarikh sasaran) — AUTO_EARLY & AUTO_MORNING berasingan.
+  //  K04: penanda 'SENYAP' (slot digugurkan semasa Mod Senyap) juga dikira —
+  //  supaya catch-up selepas restart/Mod Senyap OFF TIDAK menghantar semula.
   if (!force) {
+    // K04-S: penanda SENYAP yang GAGAL disimpan sebelum ini (proses sama) —
+    //  jangan hantar; cuba pulihkan penanda dalam DB.
+    if (penandaGagal.has(`${slotName}|${tarikh}`)) {
+      if (await tulisPenandaSenyap(slotName, tarikhDate)) penandaGagal.delete(`${slotName}|${tarikh}`);
+      return { status: 'SKIP', reason: 'DIGUGURKAN_SENYAP', slot: slotName, tarikh };
+    }
     const sudah = await prisma.telegramLog.findFirst({
-      where: { jenis: 'SNAPSHOT', triggerType: slotName, tarikh: tarikhDate, status: 'OK' },
+      where: { jenis: 'SNAPSHOT', triggerType: slotName, tarikh: tarikhDate, status: { in: ['OK', 'SENYAP'] } },
     });
-    if (sudah) return { status: 'SKIP', reason: 'SUDAH_DIHANTAR', slot: slotName, tarikh };
+    if (sudah) {
+      return { status: 'SKIP', reason: sudah.status === 'SENYAP' ? 'DIGUGURKAN_SENYAP' : 'SUDAH_DIHANTAR', slot: slotName, tarikh };
+    }
   }
+
+  // K04 — Mod Senyap: gugurkan (termasuk force/cron). Penanda dedup ditulis
+  //  (tanpa teks mesej — bukan antrian) supaya slot ini tidak dicetus semula.
+  if (await isTelegramSilentMode()) return gugurSenyap(slotName, tarikh, tarikhDate, force);
 
   const snap = await buildSnapshot({ tarikh, isAutoSnapshot: true, autoLabel: slot.label });
   if (!snap.adaRekod) return { status: 'TIADA', slot: slotName, tarikh, jumlahGuru: 0 };
@@ -217,6 +235,7 @@ async function runAutoSnapshot(slotName, { force = false } = {}) {
   if (!isTelegramConfigured()) return { status: 'ERROR', reason: 'NO_CONFIG', slot: slotName, tarikh };
 
   const hasil = await sendTelegramMessage(snap.text);
+  if (hasil.skipped) return gugurSenyap(slotName, tarikh, tarikhDate, force); // K04 — diaktifkan semasa proses
   await logTelegram({ tarikhDate, jenis: 'SNAPSHOT', triggerType: slotName, text: snap.text, hasil, totalRecords: snap.jumlahGuru });
 
   if (!hasil.ok) {
@@ -232,6 +251,53 @@ async function runAutoSnapshot(slotName, { force = false } = {}) {
   });
 
   return { status: 'OK', slot: slotName, tarikh, jumlahGuru: snap.jumlahGuru, messageId: hasil.messageId };
+}
+
+// K04 — slot snapshot digugurkan oleh Mod Senyap: tulis penanda dedup 'SENYAP'
+//  (bukan ralat, tiada messageText) kecuali larian force (ujian).
+//  K04-S: penanda dicuba DUA kali. Jika masih gagal, mesej TETAP tidak dihantar,
+//  tetapi kegagalan DILAPORKAN (status ERROR + console.error + cubaan audit) kerana
+//  tanpa penanda, slot ini boleh dihantar semula selepas restart apabila Mod Senyap OFF.
+//  Pengawal memori `penandaGagal` menghalang penghantaran semula dalam proses yang
+//  sama dan cuba memulihkan penanda pada cetusan seterusnya.
+const penandaGagal = new Set(); // `${slot}|${tarikh}` — sandaran dalam proses sahaja
+
+async function tulisPenandaSenyap(slotName, tarikhDate) {
+  try {
+    await prisma.telegramLog.create({
+      data: {
+        tarikh: tarikhDate,
+        jenis: 'SNAPSHOT',
+        triggerType: slotName,
+        messageText: null,
+        success: false,
+        errorMessage: null,
+        status: 'SENYAP',
+      },
+    });
+    return true;
+  } catch (e) {
+    console.error('gugurSenyap: penanda SENYAP gagal ditulis —', e.message);
+    return false;
+  }
+}
+
+async function gugurSenyap(slotName, tarikh, tarikhDate, force) {
+  if (force) return { status: 'SKIP', reason: 'SENYAP', slot: slotName, tarikh };
+  if ((await tulisPenandaSenyap(slotName, tarikhDate)) || (await tulisPenandaSenyap(slotName, tarikhDate))) {
+    return { status: 'SKIP', reason: 'SENYAP', slot: slotName, tarikh };
+  }
+  penandaGagal.add(`${slotName}|${tarikh}`);
+  console.error(
+    `[Mod Senyap] AMARAN: penanda SENYAP ${slotName} ${tarikh} GAGAL disimpan. Mesej TIDAK dihantar, ` +
+      'tetapi slot ini boleh dihantar semula selepas backend restart jika Mod Senyap dimatikan.'
+  );
+  await writeAudit({
+    action: 'TELEGRAM_SILENT_MARKER_FAIL',
+    entity: 'telegram_logs',
+    detail: { slot: slotName, tarikh },
+  });
+  return { status: 'ERROR', reason: 'PENANDA_SENYAP_GAGAL', dihantar: false, slot: slotName, tarikh };
 }
 
 // Pembungkus serasi-belakang (kekalkan API untuk cron + scheduler).

@@ -60,6 +60,9 @@ const SS_TABS = [
   { key: 'keutamaan', label: 'Keutamaan', jenis: 'PRIORITY_CLASS', src: 'classes', listKey: 'priorityClasses', mark: '★', pilih: 'Pilih kelas', empty: 'Tiada kelas keutamaan.', nota: 'Kelas ini didahulukan ketika jana relief (cth: STAM, kelas peperiksaan).' },
 ];
 
+// Kemaskini 01/02: kelas gabungan yang tidak dipaparkan dalam dropdown Pengecualian Kelas & Keutamaan (padanan nilai tepat).
+const SS_KELAS_KECUALI_SEMBUNYI = new Set(['3A/3M']);
+
 // Label masa "HH:MM" (24-jam) → "08:00 pagi" / "12:00 tengah hari" / "01:00 petang"
 function labelMasa(hhmm) {
   if (!hhmm) return '';
@@ -112,6 +115,13 @@ export default function ReliefDashboard() {
   const [mTamat, setMTamat] = useState('');
   const [ssBusy, setSsBusy] = useState(false);
   const [ssError, setSsError] = useState('');
+
+  // ── Kemaskini 03: Mod Relief Kecemasan (per permintaan jana; default OFF) ──
+  const [modKecemasan, setModKecemasan] = useState(false);
+  const [modDiReset, setModDiReset] = useState(false); // nota: suis kembali OFF kerana tarikh ditukar
+
+  // ── Kemaskini 05: laporan Jana Semula (dikekalkan / dibuang / konflik) — tidak dikosongkan oleh load() ──
+  const [laporanJana, setLaporanJana] = useState(null);
 
   const locked = !!data && TERKUNCI.includes(data.status);
 
@@ -247,19 +257,28 @@ export default function ReliefDashboard() {
 
   async function jana(isRegen) {
     if (busy || locked) return;
-    if (
-      isRegen &&
-      !window.confirm(
-        'Jana semula akan MEMBUANG dan menjana semula baris CADANGAN sahaja.\n\nBaris DISAHKAN dan BATAL akan KEKAL.\n\nTeruskan?'
-      )
-    ) {
-      return;
+    if (isRegen) {
+      // K05: dialog tepat — tugasan DIUBAH MANUAL / DISAHKAN / DIBATALKAN dikekalkan
+      const kekal = (data?.assignments || []).filter((a) => a.status === 'DISAHKAN' || a.status === 'BATAL' || a.diubahManual);
+      const konflikN = data?.ringkasan?.konflik || 0;
+      const mesej =
+        `Mod: ${modKecemasan ? 'RELIEF KECEMASAN (maks 2 relief sehari)' : 'Normal'}\n\n` +
+        'Jana semula akan menjana semula baris CADANGAN yang belum diubah.\n\n' +
+        `${kekal.length} tugasan akan DIKEKALKAN (diubah manual / disahkan / dibatalkan) selagi slotnya masih diperlukan.\n\n` +
+        (konflikN ? `⚠ ${konflikN} tugasan berkonflik akan dikekalkan TANPA diubah — sila betulkan selepas ini.\n\n` : '') +
+        'Tugasan yang slotnya tidak lagi diperlukan akan dibuang dan dilaporkan.\n\nTeruskan?';
+      if (!window.confirm(mesej)) return;
     }
     setBusy(true);
     setError('');
     setNotice('');
+    setLaporanJana(null);
     try {
-      const r = await api.relief.generate(tarikh);
+      const r = await api.relief.generate(tarikh, modKecemasan === true);
+      const k = r.kekal || {};
+      if ((k.dikekalkan || 0) > 0 || (k.tidakDiperlukan || []).length > 0 || (k.konflik || []).length > 0) {
+        setLaporanJana({ dikekalkan: k.dikekalkan || 0, tidakDiperlukan: k.tidakDiperlukan || [], konflik: k.konflik || [] });
+      }
       if (!r.batchId) {
         setData(null);
         setNotice(r.mesej || 'Tiada cadangan dijana untuk tarikh ini.');
@@ -267,8 +286,10 @@ export default function ReliefDashboard() {
         await load(tarikh);
       }
     } catch (e) {
-      if (e.status === 409) setError(e.message || 'Batch terkunci — tidak boleh jana semula.');
-      else setError(e.message || 'Gagal menjana jadual relief');
+      if (e.status === 409) {
+        await load(tarikh); // selaras semula dahulu (load() mengosongkan ralat) — cth: jadual diubah admin lain
+        setError(e.message || 'Batch terkunci — tidak boleh jana semula.');
+      } else setError(e.message || 'Gagal menjana jadual relief');
     } finally {
       setBusy(false);
     }
@@ -278,17 +299,30 @@ export default function ReliefDashboard() {
     if (rowBusy || locked) return;
     setRowBusy(id);
     setError('');
+    const semasa = data?.assignments?.find((a) => a.id === id)?.guruGanti ?? null;
     try {
-      await api.relief.updateTeacher(id, guruGanti);
+      const r = await api.relief.updateTeacher(id, guruGanti, semasa);
       // Kemas kini setempat (tidak perlu reload penuh) — kekalkan status & calon
       setData((d) =>
         d
-          ? { ...d, assignments: d.assignments.map((a) => (a.id === id ? { ...a, guruGanti } : a)) }
+          ? {
+              ...d,
+              assignments: d.assignments.map((a) =>
+                a.id === id ? { ...a, guruGanti: r?.guruGanti ?? guruGanti, isTier2: !!r?.isTier2, diubahManual: true } : a
+              ),
+            }
           : d
       );
+      // K05: segar semula konflik & calon tanpa paparan "Memuatkan…"
+      try {
+        setData(await api.relief.get(tarikh));
+      } catch {
+        /* paparan setempat kekal */
+      }
     } catch (e) {
+      // K05: selaras semula DAHULU (load() mengosongkan ralat), kemudian papar sebab penolakan
+      await load(tarikh);
       setError(e.message || 'Gagal menukar guru ganti');
-      await load(tarikh); // selaras semula jika gagal
     } finally {
       setRowBusy(0);
     }
@@ -296,6 +330,15 @@ export default function ReliefDashboard() {
 
   async function janaPdf() {
     if (pdfBusy || !data || rowsSorted.length === 0) return;
+    const konflikN = data?.ringkasan?.konflik || 0;
+    if (
+      konflikN > 0 &&
+      !window.confirm(
+        `⚠ Jadual ini mempunyai ${konflikN} tugasan berkonflik dan BELUM bebas konflik.\n\nPDF akan mengandungi jadual semasa (termasuk tugasan berkonflik). Teruskan?`
+      )
+    ) {
+      return;
+    }
     setPdfBusy(true);
     setError('');
     try {
@@ -322,7 +365,7 @@ export default function ReliefDashboard() {
       guruAbsen: new Set(rows.map((a) => a.guruTakHadir)).size,
       slot: rows.length,
       ganti: new Set(
-        rows.filter((a) => a.guruGanti && a.guruGanti !== TIADA).map((a) => a.guruGanti.trim().toUpperCase())
+        rows.filter((a) => a.status !== 'BATAL' && a.guruGanti && a.guruGanti !== TIADA).map((a) => a.guruGanti.trim().toUpperCase())
       ).size,
     };
   }, [data]);
@@ -363,7 +406,12 @@ export default function ReliefDashboard() {
   }
 
   const ssCur = SS_TABS.find((t) => t.key === ssTab);
-  const ssSource = ssCur.src === 'teachers' ? ssOpts.teachers : ssOpts.classes;
+  const ssSource =
+    ssCur.src === 'teachers'
+      ? ssOpts.teachers
+      : ssCur.jenis === 'CLASS_EXCLUSION' || ssCur.jenis === 'PRIORITY_CLASS'
+        ? ssOpts.classes.filter((k) => !SS_KELAS_KECUALI_SEMBUNYI.has(k))
+        : ssOpts.classes;
   const ssActive = ssData ? ssData[ssCur.listKey] || [] : [];
   const ssActiveSet = new Set(ssActive.map((x) => x.target));
   const ssAvail = ssSource.filter((x) => !ssActiveSet.has(x) && !ssChips.includes(x));
@@ -388,7 +436,13 @@ export default function ReliefDashboard() {
             type="date"
             className="inp"
             value={tarikh}
-            onChange={(e) => setTarikh(e.target.value)}
+            onChange={(e) => {
+              // Kemaskini 03: mod kecemasan TIDAK dibawa ke tarikh lain secara senyap
+              if (modKecemasan) setModDiReset(true);
+              setModKecemasan(false);
+              setLaporanJana(null);
+              setTarikh(e.target.value);
+            }}
             aria-label="Tarikh"
           />
         </div>
@@ -524,6 +578,30 @@ export default function ReliefDashboard() {
           <button className="btn ghost" onClick={() => load(tarikh)} disabled={loading || busy}>
             Refresh
           </button>
+          {!locked && (
+            <label className={`modK ${modKecemasan ? 'on' : ''}`}>
+              <input
+                type="checkbox"
+                role="switch"
+                aria-checked={modKecemasan}
+                checked={modKecemasan}
+                disabled={busy}
+                onChange={(e) => {
+                  setModKecemasan(e.target.checked);
+                  setModDiReset(false);
+                }}
+              />
+              <span className="modKTxt">
+                <b>Mod Relief Kecemasan: {modKecemasan ? 'ON' : 'OFF'}</b>
+                <small>
+                  {modKecemasan
+                    ? 'Benarkan maksimum 2 relief sehari mengikut kelapangan guru.'
+                    : 'Mod Normal — peraturan relief asal.'}
+                  {modDiReset && !modKecemasan ? ' (Ditetapkan semula ke OFF kerana tarikh ditukar.)' : ''}
+                </small>
+              </span>
+            </label>
+          )}
         </div>
 
         {locked && (
@@ -534,6 +612,40 @@ export default function ReliefDashboard() {
         )}
         {error && <div className="alert" role="alert">{error}</div>}
         {!error && notice && <div className="notice" role="status">{notice}</div>}
+
+        {/* K05 — amaran konflik keseluruhan: jadual TIDAK digambarkan sebagai bebas konflik */}
+        {data && (data.ringkasan?.konflik || 0) > 0 && (
+          <div className="alert konflikBanner" role="alert">
+            ⚠ Jadual ini mempunyai <b>{data.ringkasan.konflik}</b> tugasan berkonflik dan <b>belum bebas konflik</b>.
+            Semak baris bertanda ⚠ dan tukar guru ganti.
+          </div>
+        )}
+        {/* K05 — laporan Jana Semula */}
+        {laporanJana && (
+          <div className="notice laporan" role="status">
+            <div><b>{laporanJana.dikekalkan}</b> tugasan dikekalkan (diubah manual / disahkan / dibatalkan).</div>
+            {laporanJana.tidakDiperlukan.length > 0 && (
+              <div>
+                <b>{laporanJana.tidakDiperlukan.length}</b> tugasan dibuang kerana slot tidak lagi memerlukan relief:
+                <ul>
+                  {laporanJana.tidakDiperlukan.map((t) => (
+                    <li key={t.id}>{t.kelas} · {t.masa} · {t.guruGanti === TIADA ? 'TIADA PENGGANTI' : t.guruGanti || '—'}{t.diubahManual ? ' (manual)' : ''}{t.status !== 'CADANGAN' ? ` (${t.status})` : ''}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {laporanJana.konflik.length > 0 && (
+              <div className="laporanKonflik">
+                ⚠ <b>{laporanJana.konflik.length}</b> tugasan dikekalkan tetapi berkonflik:
+                <ul>
+                  {laporanJana.konflik.map((t) => (
+                    <li key={t.id}>{t.kelas} · {t.masa} · {t.guruGanti} — {t.mesej}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Statistik ringkas */}
         {data && (
@@ -624,7 +736,7 @@ export default function ReliefDashboard() {
                   rowsSorted.map((a, i) => {
                     const { mula, tamat } = splitMasa(a.masa);
                     return (
-                      <tr key={a.id}>
+                      <tr key={a.id} className={a.konflik ? 'rowKonflik' : undefined}>
                         <td className="cNo">{i + 1}</td>
                         <td className="cName">{a.guruTakHadir}</td>
                         <td><span className="kelas">{a.kelas}</span></td>
@@ -634,6 +746,11 @@ export default function ReliefDashboard() {
                         <td className="cGanti">
                           {gantiSelect(a)}
                           {rowBusy === a.id && <span className="saving"> …</span>}
+                          {/* K05 — status tugasan manual & konflik */}
+                          {a.diubahManual && <span className="tagK manual">Manual</span>}
+                          {a.status === 'DISAHKAN' && <span className="tagK sah">Disahkan</span>}
+                          {a.status === 'BATAL' && <span className="tagK batal">Dibatalkan</span>}
+                          {a.konflik && <div className="konflikNote" role="note">⚠ {a.konflik.mesej}</div>}
                         </td>
                       </tr>
                     );
@@ -672,6 +789,11 @@ export default function ReliefDashboard() {
         .statLbl { font-size: 12px; color: #5b716a; margin-top: 4px; }
         .meta { margin: 0 0 16px; font-size: 12.5px; color: #5b716a; }
 
+        .modK { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 13px; color: #3b544c; background: #f1f5f4; border: 1px solid #d3ded9; border-radius: 9px; cursor: pointer; }
+        .modK.on { color: #b42318; background: #fef3f2; border-color: #fcd2cd; }
+        .modK input { width: 16px; height: 16px; accent-color: #b42318; cursor: pointer; }
+        .modKTxt { display: flex; flex-direction: column; line-height: 1.3; }
+        .modKTxt small { font-size: 11.5px; opacity: .85; }
         .alert { margin: 0 0 14px; padding: 10px 12px; font-size: 13px; color: #b42318; background: #fef3f2; border: 1px solid #fcd2cd; border-radius: 9px; }
         .ss { margin: 0 0 16px; padding: 16px; background: #fafcfb; border: 1px solid #dce5e2; border-radius: 14px; }
         .ssHead { font-size: 15px; font-weight: 700; color: #0f2a23; }
@@ -712,6 +834,13 @@ export default function ReliefDashboard() {
         .ssEmpty { margin: 14px 0 0; padding: 16px; text-align: center; font-size: 13px; color: #5f7a72; background: #fff; border: 1px dashed #cdd9d4; border-radius: 10px; }
         .notice { margin: 0 0 14px; padding: 10px 12px; font-size: 13px; color: #3b544c; background: #f1f5f4; border: 1px solid #d3ded9; border-radius: 9px; }
         .notice.locked { color: #92400e; background: #fef6e7; border-color: #f5e0b8; }
+        .notice.laporan ul { margin: 4px 0 6px 18px; padding: 0; }
+        .laporanKonflik { color: #b42318; }
+        .rowKonflik td { background: #fef3f2; }
+        .konflikNote { margin-top: 4px; font-size: 12px; color: #b42318; }
+        .tagK { display: inline-block; margin-left: 6px; padding: 1px 7px; font-size: 11px; border-radius: 999px; border: 1px solid #d3ded9; color: #3b544c; background: #f1f5f4; vertical-align: middle; }
+        .tagK.sah { color: #0f6b43; background: #ecfdf3; border-color: #b7ebcd; }
+        .tagK.batal { color: #92400e; background: #fef6e7; border-color: #f5e0b8; }
         .panel { background: #fff; border: 1px solid #dce5e2; border-radius: 12px; }
         .empty { text-align: center; color: #80958e; padding: 28px 16px; }
 

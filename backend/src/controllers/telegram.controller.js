@@ -14,7 +14,13 @@ import prisma from '../lib/prisma.js';
 import { writeAudit, getClientIp } from '../lib/audit.js';
 import { buildSnapshot, tarikhKeUtcDate, masaSekarangKL } from '../services/snapshot.service.js';
 import { sendTelegramMessage, isTelegramConfigured } from '../lib/telegram.js';
-import { getTelegramSettings, setTelegramSettings, snapshotTimeLabel } from '../lib/telegramSettings.js';
+import {
+  getTelegramSettings,
+  setTelegramSettings,
+  snapshotTimeLabel,
+  isTelegramSilentMode,
+  setTelegramSilentMode,
+} from '../lib/telegramSettings.js';
 
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
@@ -87,7 +93,7 @@ export async function sendSnapshot(req, res) {
       });
     }
 
-    const hasil = await sendTelegramMessage(snap.text);
+    const hasil = await sendTelegramMessage(snap.text, { manual: true }); // K04 — manual: tidak disekat Mod Senyap
 
     // Rekod ke telegram_logs (samada jaya atau gagal)
     await prisma.telegramLog.create({
@@ -175,6 +181,53 @@ export async function updateSettings(req, res) {
     console.error('updateSettings ERROR:', err);
     res.status(500).json({ mesej: 'Ralat menyimpan tetapan Telegram', error: err.message });
   }
+}
+
+// ── Kemaskini 04: Mod Senyap Telegram ──
+// GET   /api/telegram/silent-mode  (Super Admin + Admin — baca sahaja)
+export async function getSilentMode(req, res) {
+  try {
+    res.json({ silentMode: await isTelegramSilentMode() });
+  } catch (err) {
+    console.error('getSilentMode ERROR:', err);
+    res.status(500).json({ mesej: 'Ralat membaca Mod Senyap Telegram', error: err.message });
+  }
+}
+
+// PATCH /api/telegram/silent-mode  { silentMode: boolean }  (Super Admin sahaja — lihat routes)
+export async function updateSilentMode(req, res) {
+  const parsed = z.object({ silentMode: z.boolean() }).strict().safeParse(req.body || {});
+  if (!parsed.success) {
+    return res.status(400).json({ mesej: 'Input tidak sah (silentMode mesti boolean).' });
+  }
+  let statusLama;
+  let statusBaharu;
+  try {
+    statusLama = await isTelegramSilentMode();
+    statusBaharu = await setTelegramSilentMode(parsed.data.silentMode);
+  } catch (err) {
+    // Gagal SEBELUM/KETIKA simpan — status tidak disahkan berubah (frontend akan muat semula status sebenar)
+    console.error('updateSilentMode ERROR:', err);
+    return res.status(500).json({ mesej: 'Ralat menyimpan Mod Senyap Telegram', error: err.message });
+  }
+  // K04-S: status SUDAH disimpan — kegagalan audit tidak boleh dilaporkan sebagai
+  //  kegagalan simpan. Pulangkan status sebenar + amaran audit secara jelas.
+  const auditOk = await writeAudit({
+    userId: req.user?.id || null,
+    action: 'TELEGRAM_SILENT_MODE_UPDATE',
+    entity: 'telegram_settings',
+    detail: { statusLama, statusBaharu, oleh: req.user?.username || null },
+    ip: getClientIp(req),
+  });
+  if (!auditOk) {
+    console.error(`updateSilentMode: status disimpan (${statusLama} → ${statusBaharu}) TETAPI audit log gagal ditulis.`);
+    return res.json({
+      silentMode: statusBaharu,
+      auditGagal: true,
+      amaran: 'Status Mod Senyap disimpan, tetapi rekod audit log gagal ditulis.',
+    });
+  }
+  res.json({ silentMode: statusBaharu });
 }
 
 // ── GET /api/telegram/status (Super Admin + Admin) ──

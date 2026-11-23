@@ -5,6 +5,8 @@
 //    GET  /settings         → SUPER_ADMIN + ADMIN
 //    PATCH /settings        → SUPER_ADMIN sahaja
 //    GET  /status           → SUPER_ADMIN + ADMIN
+//    GET  /silent-mode      → SUPER_ADMIN + ADMIN   (K04)
+//    PATCH /silent-mode     → SUPER_ADMIN sahaja    (K04)
 // ════════════════════════════════════════════════════════════
 
 import { Router } from 'express';
@@ -14,6 +16,8 @@ import {
   getSettings,
   updateSettings,
   getStatus,
+  getSilentMode,
+  updateSilentMode,
 } from '../controllers/telegram.controller.js';
 import { authenticate } from '../middleware/authenticate.js';
 import { authorize } from '../middleware/authorize.js';
@@ -28,5 +32,7 @@ router.post('/snapshot/send', authorize('SUPER_ADMIN'), sendSnapshot);
 router.get('/settings', authorize('SUPER_ADMIN', 'ADMIN'), getSettings);
 router.patch('/settings', authorize('SUPER_ADMIN'), updateSettings);
 router.get('/status', authorize('SUPER_ADMIN', 'ADMIN'), getStatus);
+router.get('/silent-mode', authorize('SUPER_ADMIN', 'ADMIN'), getSilentMode);
+router.patch('/silent-mode', authorize('SUPER_ADMIN'), updateSilentMode);
 
 export default router;
